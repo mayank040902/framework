@@ -1,0 +1,109 @@
+{
+  "name": "@bootstrap-framework/logger",
+  "version": "1.0.0",
+  "description": "High-performance structured logging with Pino, Fastify integration, and transport utilities.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./config": {
+      "types": "./dist/config.d.ts",
+      "import": "./dist/config.js",
+      "default": "./dist/config.js"
+    },
+    "./http": {
+      "types": "./dist/http.d.ts",
+      "import": "./dist/http.js",
+      "default": "./dist/http.js"
+    },
+    "./logger": {
+      "types": "./dist/logger.d.ts",
+      "import": "./dist/logger.js",
+      "default": "./dist/logger.js"
+    },
+    "./serialize": {
+      "types": "./dist/serialize.d.ts",
+      "import": "./dist/serialize.js",
+      "default": "./dist/serialize.js"
+    },
+    "./transport": {
+      "types": "./dist/transport.d.ts",
+      "import": "./dist/transport.js",
+      "default": "./dist/transport.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "examples",
+    "LICENSE",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc -w -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prepack": "npm run build",
+    "prepublishOnly": "npm run build && npm test",
+    "pack:check": "npm pack --dry-run"
+  },
+  "keywords": [
+    "bootstrap",
+    "framework",
+    "node",
+    "typescript",
+    "logger",
+    "pino",
+    "structured-logging",
+    "fastify"
+  ],
+  "author": "mayank",
+  "license": "MIT",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mayank040902/framework.git",
+    "directory": "packages/logger"
+  },
+  "bugs": {
+    "url": "https://github.com/mayank040902/framework/issues"
+  },
+  "homepage": "https://github.com/mayank040902/framework/tree/main/packages/logger#readme",
+  "dependencies": {
+    "pino": "^10.3.1",
+    "pino-http": "^11.0.0",
+    "pino-std-serializers": "^7.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.5.2",
+    "fastify": "^5.12.5",
+    "pino-pretty": "^13.1.3",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4"
+  },
+  "peerDependencies": {
+    "pino-pretty": "^13.1.3"
+  },
+  "peerDependenciesMeta": {
+    "pino-pretty": {
+      "optional": true
+    }
+  }
+}

@@ -1,0 +1,9 @@
+src
+test
+coverage
+*.tsbuildinfo
+tsconfig.json
+tsconfig.build.json
+CONTRIBUTING.md
+package-lock.json
+node_modules

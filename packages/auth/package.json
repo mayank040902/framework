@@ -1,0 +1,97 @@
+{
+  "name": "@bootstrap-framework/auth",
+  "version": "1.0.0",
+  "description": "Framework-agnostic authentication: JWT, generic RBAC, password hashing, and social OAuth. Works standalone or with Express, Fastify, Koa, and uWebSockets.js.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "examples",
+    "LICENSE",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "tsc -w -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsx --test test/*.test.ts",
+    "prepack": "npm run build",
+    "prepublishOnly": "npm run build && npm test",
+    "pack:check": "npm pack --dry-run"
+  },
+  "keywords": [
+    "auth",
+    "authentication",
+    "jwt",
+    "jsonwebtoken",
+    "oauth",
+    "oauth2",
+    "oidc",
+    "rbac",
+    "permissions",
+    "roles",
+    "google",
+    "github",
+    "express",
+    "fastify",
+    "koa",
+    "uwebsockets",
+    "typescript",
+    "bootstrap-framework"
+  ],
+  "author": "mayank",
+  "license": "MIT",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mayank040902/framework.git",
+    "directory": "packages/auth"
+  },
+  "bugs": {
+    "url": "https://github.com/mayank040902/framework/issues"
+  },
+  "homepage": "https://github.com/mayank040902/framework/tree/main/packages/auth#readme",
+  "dependencies": {
+    "jsonwebtoken": "^9.0.2"
+  },
+  "devDependencies": {
+    "@types/jsonwebtoken": "^9.0.7",
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  },
+  "peerDependencies": {
+    "express": ">=4",
+    "fastify": ">=4",
+    "koa": ">=2"
+  },
+  "peerDependenciesMeta": {
+    "express": {
+      "optional": true
+    },
+    "fastify": {
+      "optional": true
+    },
+    "koa": {
+      "optional": true
+    }
+  }
+}

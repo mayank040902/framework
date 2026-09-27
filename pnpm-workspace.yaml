@@ -1,0 +1,11 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+  - "examples/*"
+  - "templates/*"
+  - "docs/*"
+
+allowBuilds:
+  '@swc/core': true
+  esbuild: true
+  msgpackr-extract: true

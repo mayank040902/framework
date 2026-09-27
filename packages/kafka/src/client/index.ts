@@ -1,0 +1,11 @@
+export * from "./config.js";
+export type { KafkaClientOptions } from "./config.js";
+export { createProducer } from "./producer.js";
+export type { Producer } from "./producer.js";
+export { createConsumer, subscribeToTopic, consumeMessages } from "./consumer.js";
+export type { Consumer, EachMessagePayload } from "./consumer.js";
+export { createAdmin } from "./admin.js";
+export type { Admin } from "./admin.js";
+export { registerShutdown, shutdownClient } from "./shutdown.js";
+export { getSslConfig } from "./ssl.js";
+export { getSaslConfig } from "./sasl.js";

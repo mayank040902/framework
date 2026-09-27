@@ -1,0 +1,13 @@
+node_modules/
+dist/
+build/
+coverage/
+.turbo/
+*.tsbuildinfo
+*.tgz
+.DS_Store
+.env
+.env.*
+!.env.example
+.npm-cache/
+.pnpm-store/

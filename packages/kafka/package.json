@@ -1,0 +1,81 @@
+{
+  "name": "@bootstrap-framework/kafka",
+  "version": "1.0.0",
+  "description": "Production-ready Kafka client for Node.js. Works standalone or with any framework logger, with optional JSON codec.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./client": {
+      "types": "./dist/client/index.d.ts",
+      "import": "./dist/client/index.js",
+      "default": "./dist/client/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "examples",
+    "LICENSE",
+    "README.md",
+    "CHANGELOG.md",
+    ".env.example"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc -w -p tsconfig.json",
+    "test": "tsx --test test/*.test.js",
+    "test:watch": "tsx --test --watch test/*.test.js",
+    "lint": "eslint src test examples",
+    "typecheck": "tsc --noEmit --pretty false",
+    "example:standalone": "node examples/standalone.js",
+    "example:framework": "node examples/framework.js",
+    "prepack": "npm run build",
+    "prepublishOnly": "npm run build && npm test",
+    "pack:check": "npm pack --dry-run"
+  },
+  "keywords": [
+    "kafka",
+    "kafkajs",
+    "producer",
+    "consumer",
+    "admin",
+    "nodejs",
+    "microservice",
+    "bootstrap-framework"
+  ],
+  "author": "mayank",
+  "license": "MIT",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mayank040902/framework.git",
+    "directory": "packages/kafka"
+  },
+  "bugs": {
+    "url": "https://github.com/mayank040902/framework/issues"
+  },
+  "homepage": "https://github.com/mayank040902/framework/tree/main/packages/kafka#readme",
+  "dependencies": {
+    "kafkajs": "^2.2.4"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.10",
+    "eslint": "^9.22.0",
+    "tsx": "^4.20.5",
+    "typescript": "^5.8.2"
+  }
+}

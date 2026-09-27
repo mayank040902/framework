@@ -1,0 +1,33 @@
+{
+  "files": [],
+  "compilerOptions": {
+    /* Environment */
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "lib": [
+      "ES2022"
+    ],
+    "types": [
+      "node"
+    ],
+    /* ESM */
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "moduleDetection": "force",
+    /* Type Checking */
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "forceConsistentCasingInFileNames": true,
+    /* Output */
+    "sourceMap": true,
+    "declaration": true,
+    "declarationMap": true,
+    /* Misc */
+    "noUncheckedSideEffectImports": true,
+    "skipLibCheck": true
+  }
+}
