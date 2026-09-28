@@ -1,192 +1,343 @@
 # Contributing to @oneunit/database
 
-Thank you for considering contributing! This document will help you get started.
+Thank you for your interest in contributing! This guide covers everything you need to get started.
 
-## Quick Start
+---
+
+## Table of Contents
+
+- [Prerequisites](#prerequisites)
+- [Development Setup](#development-setup)
+- [Project Structure](#project-structure)
+- [Development Workflow](#development-workflow)
+- [Coding Guidelines](#coding-guidelines)
+  - [TypeScript](#typescript)
+  - [API Design](#api-design)
+  - [Error Handling](#error-handling)
+  - [Security](#security)
+  - [Code Style](#code-style)
+- [Testing](#testing)
+- [Common Tasks](#common-tasks)
+- [Pull Request Process](#pull-request-process)
+- [Release Process (Maintainers)](#release-process-maintainers)
+- [Getting Help](#getting-help)
+
+---
+
+## Prerequisites
+
+- **Node.js 20+**
+- **npm** (ships with Node.js)
+- A code editor with TypeScript support (VS Code recommended)
+- No live PostgreSQL instance needed — all tests use mocks
+
+---
+
+## Development Setup
 
 ```bash
-# Clone the repository
+# Clone the monorepo
 git clone https://github.com/mayank040902/oneunit.git
-cd packages/database
+cd oneunit/packages/database
 
 # Install dependencies
 npm install
 
-# Run tests
-npm test
-
-# Run typecheck
-npm run typecheck
-
-# Watch mode for development
-npm run dev
+# Verify everything works
+npm run typecheck && npm test && npm run build
 ```
+
+### Useful Commands
+
+| Command | Description |
+| :--- | :--- |
+| `npm run dev` | Watch mode — recompiles on save |
+| `npm run build` | Compile TypeScript to `dist/` |
+| `npm run typecheck` | Type-check without emitting (strict mode) |
+| `npm test` | Run all tests |
+| `npm run test:watch` | Run tests in watch mode |
+| `npm run pack:check` | Dry-run `npm pack` to verify package contents |
+
+---
 
 ## Project Structure
 
 ```
 packages/database/
-├── src/                    # Source code (TypeScript)
-│   ├── index.ts           # Main entry point
-│   ├── database.ts        # createDatabase() - composes all components
-│   ├── types.ts           # All TypeScript types and interfaces
-│   ├── json-serialization.ts  # JSON serialization utilities
+├── src/                         # Source code (TypeScript, ESM)
+│   ├── index.ts                 # Public barrel — all re-exports
+│   ├── database.ts              # createDatabase() — composition root
+│   ├── types.ts                 # All TypeScript interfaces and types
+│   ├── json-serialization.ts    # JSON encode/decode utilities
 │   │
-│   ├── client/            # Connection management
-│   ├── query/             # SQL building (sql template, QueryBuilder)
-│   ├── model/             # Model CRUD helpers
-│   ├── schema/            # DDL helpers (create/alter/drop/constrain/migrate)
-│   └── column/            # Column definition helpers (id, uuid, timestamp)
+│   ├── client/                  # Connection, execution, lifecycle
+│   │   ├── pool.ts              # Pool creation and config
+│   │   ├── config.ts            # Environment-based config loading
+│   │   ├── client.ts            # Query execution (query, queryOne, prepare)
+│   │   ├── transaction.ts       # Transaction management
+│   │   ├── batch.ts             # Bulk insert helpers
+│   │   ├── stream.ts            # pg-query-stream wrapper
+│   │   ├── cursor.ts            # pg-cursor wrapper
+│   │   ├── check.ts             # Health checks
+│   │   ├── shutdown.ts          # Graceful pool shutdown
+│   │   ├── retry.ts             # Retry with exponential backoff
+│   │   ├── errors.ts            # Error classes and classifiers
+│   │   └── hooks.ts             # Instrumentation hooks and metrics
+│   │
+│   ├── query/                   # SQL construction
+│   │   ├── sql.ts               # sql`` tagged template
+│   │   └── builder.ts           # Fluent QueryBuilder
+│   │
+│   ├── model/                   # Table-level CRUD
+│   │   └── model.ts             # createModel(), createModelFactory()
+│   │
+│   ├── schema/                  # DDL operations
+│   │   ├── schema.ts            # SchemaManager facade
+│   │   ├── create.ts            # CREATE TABLE / INDEX
+│   │   ├── alter.ts             # ALTER TABLE
+│   │   ├── drop.ts              # DROP TABLE / INDEX
+│   │   ├── constrain.ts         # Constraints (unique, FK, check)
+│   │   └── migrate.ts           # Migration runner
+│   │
+│   └── column/                  # Column definition helpers
+│       ├── id.ts                # id(), bigIntId(), uuid()
+│       └── timestamp.ts         # timestamp()
 │
-├── dist/                   # Compiled output (generated, do not edit)
-├── test/                   # Tests (Node.js built-in test runner)
-├── examples/               # Runnable examples
+├── test/                        # Tests (Node.js built-in test runner)
+├── dist/                        # Compiled output (git-ignored, auto-generated)
+├── examples/                    # Runnable usage examples
+├── ARCHITECTURE.md              # Internal design reference
+├── CHANGELOG.md                 # Version history (Keep a Changelog format)
+├── CONTRIBUTING.md              # This file
+├── LICENSE                      # MIT
+├── README.md                    # User-facing documentation
 ├── package.json
-├── tsconfig.json
-├── CHANGELOG.md
-└── README.md
+└── tsconfig.json
 ```
+
+For a deeper dive into internals, see [ARCHITECTURE.md](ARCHITECTURE.md).
+
+---
 
 ## Development Workflow
 
-### 1. Make Your Changes
-
-- Write code in `src/` (TypeScript)
-- Follow existing patterns and code style
-- Add tests for new functionality in `test/`
-
-### 2. Run Checks
+### 1. Create a Branch
 
 ```bash
-# Type checking (strict mode)
-npm run typecheck
-
-# Run all tests
-npm test
-
-# Run tests in watch mode
-npm run test:watch
-
-# Build to verify compilation
-npm run build
+git checkout -b feature/your-feature   # or fix/your-fix, docs/your-docs
 ```
 
-### 3. Before Submitting
+### 2. Write Your Code
+
+- Implement changes in `src/` (TypeScript)
+- Follow existing patterns — the codebase uses composition with factory functions, not classes
+- Add or update tests in `test/`
+
+### 3. Validate
 
 ```bash
-# Full validation
+# Quick check during development
+npm run typecheck && npm test
+
+# Full validation before submitting
 npm run typecheck && npm test && npm run build && npm run pack:check
 ```
+
+### 4. Update Documentation
+
+- **User-facing changes** → update [README.md](README.md)
+- **Internal changes** → update [ARCHITECTURE.md](ARCHITECTURE.md)
+- **All changes** → add an entry to [CHANGELOG.md](CHANGELOG.md) under `## [Unreleased]`
+
+---
 
 ## Coding Guidelines
 
 ### TypeScript
 
-- **Strict mode enabled** - no `any`, no implicit any
-- Use explicit return types for public functions
+- **Strict mode** is enabled — no `any`, no implicit any
+- Use **explicit return types** for all public/exported functions
 - Prefer `interface` over `type` for object shapes
-- Export types alongside implementations
+- Export types alongside their implementations
+- All source is ESM (`"type": "module"` in package.json)
 
 ### API Design
 
-- **Keep public API backward compatible** - add new exports alongside existing ones
-- **No workspace/runtime dependencies** on `@oneunit/*` packages
-- **Parameterized SQL only** - never interpolate untrusted values
-- **Retries opt-in only** - only for genuinely transient errors
-- **No credential logging** - parameters never logged by default
+- **Backward compatibility** — add new exports alongside existing ones; don't remove or rename public API without a major version bump
+- **No workspace runtime dependencies** — `@oneunit/database` must remain standalone; it depends only on `pg` at runtime
+- **Parameterized SQL only** — never interpolate untrusted values into SQL strings; always use `$1, $2, …` placeholders
+- **Retries are opt-in** — only transient errors (serialization failures, deadlocks, connection loss) are retryable
+- **Factory composition** — new features should follow the `createX(dependencies) → API` pattern used throughout the codebase (see [ARCHITECTURE.md](ARCHITECTURE.md#composition-model))
 
 ### Error Handling
 
-- Wrap driver errors as `DatabaseError` (preserves original on `cause`)
-- Use classifier functions (`isUniqueViolation`, `isTransientError`, etc.)
-- `TimeoutError` is always transient
+- Wrap raw `pg` errors with `normalizeError()` → produces a `DatabaseError`
+- Preserve the original error on `.cause`
+- Use the classifier functions (`isUniqueViolation`, `isTransientError`, etc.) rather than checking error codes directly
+- `TimeoutError` extends `DatabaseError` and is always marked `transient: true`
 
-### Testing
+### Security
 
-- Tests use **Node's built-in test runner** (`node:test`)
-- **No live PostgreSQL required** - tests mock `pg.Pool` and `PoolClient`
-- Test file naming: `*.test.js` in `test/`
-- Run single test: `node --test test/specific.test.js`
+- **Never log credentials** — `loadDatabaseConfig()` redacts passwords; respect this pattern
+- **Never log query parameters by default** — the `logParameters: true` opt-in exists for a reason
+- Validate file paths in SSL config (`parseSslConfig()` already does this)
 
 ### Code Style
 
-- No semicolons (TypeScript default)
-- 2-space indentation
-- Single quotes for strings
-- Trailing commas in multiline objects/arrays
-- Descriptive variable names
+- 4-space indentation
+- Trailing commas in multiline constructs
+- Descriptive variable names — favor clarity over brevity
+- Keep functions small and focused — one responsibility per function
+
+---
+
+## Testing
+
+### Philosophy
+
+- **No live PostgreSQL required** — all tests use mocked `pg.Pool` and `PoolClient`
+- **Fast** — the full suite runs in seconds
+- **Isolated** — each test sets up its own mocks; no shared mutable state
+
+### Running Tests
+
+```bash
+npm test                                 # all tests
+npm run test:watch                       # re-run on file changes
+node --test test/specific.test.js        # single file
+```
+
+### Writing Tests
+
+- Test files go in `test/` with the naming convention `*.test.js`
+- Use Node's built-in `node:test` and `node:assert` modules
+- Mock `pg.Pool` and `PoolClient` — see existing tests for patterns
+- Test both success paths and error paths
+- For error classifiers, test with realistic PostgreSQL error codes
+
+### Test Coverage Map
+
+| Area | Test Files |
+| :--- | :--- |
+| Database composition | `create-database.test.js`, `database.test.js` |
+| Query execution | `client-extended.test.js` |
+| Config loading | `config.test.js`, `config-extended.test.js` |
+| Error handling | `errors.test.js` |
+| Health & shutdown | `lifecycle.test.js` |
+| Retry logic | `retry.test.js` |
+| Transactions | `transaction-extended.test.js` |
+| Batch & models | `batch-model.test.js` |
+| Migrations | `migrations.test.js` |
+| Query builder | `query-builder.test.js` |
+| Serialization | `msgpack.test.js` |
+
+---
 
 ## Common Tasks
 
-### Adding a New Export
+### Adding a New Public Export
 
-1. Implement in appropriate `src/` module
-2. Export from module's `index.ts`
+1. Implement in the appropriate `src/` module
+2. Export from the module's `index.ts` barrel
 3. Re-export from `src/index.ts`
-4. Add TypeScript declaration in `types.ts` if needed
+4. Add TypeScript types/interfaces to `src/types.ts`
 5. Add tests
-6. Update README if user-facing
+6. Update README.md if user-facing
 
 ### Adding a Query Builder Method
 
-1. Add method to `QueryBuilder` class in `src/query/builder.ts`
-2. Add type to `QueryBuilder` interface in `src/types.ts`
+1. Add the method to the `QueryBuilder` class in `src/query/builder.ts`
+2. Add the type signature to the `QueryBuilder` interface in `src/types.ts`
 3. Add tests in `test/query-builder.test.js`
+
+### Adding a Model Method
+
+1. Add the method in `src/model/model.ts`
+2. Add the type signature to the `Model` interface in `src/types.ts`
+3. Add tests in `test/batch-model.test.js`
 
 ### Adding an Error Classifier
 
-1. Add PostgreSQL error code to `TRANSIENT_ERROR_CODES` or similar in `src/client/errors.ts`
-2. Export classifier function
-3. Add to `types.ts` declarations
+1. Add the PostgreSQL error code constant and classifier function in `src/client/errors.ts`
+2. Export the classifier
+3. Add the type declaration in `src/types.ts`
 4. Add tests in `test/errors.test.js`
+5. Document in README.md error helpers table
 
-### Updating Configuration
+### Adding a Configuration Variable
 
-1. Modify `loadDatabaseConfig()` in `src/client/config.ts`
-2. Add environment variable mapping
-3. Update README configuration table
-4. Add tests in `test/config.test.js`
+1. Add the env variable mapping in `loadDatabaseConfig()` in `src/client/config.ts`
+2. Add tests in `test/config.test.js`
+3. Update the configuration table in README.md
+
+### Adding a Schema Operation
+
+1. Implement in the appropriate `src/schema/*.ts` file
+2. Wire it into `createSchemaManager()` in `src/schema/schema.ts`
+3. Add the type to the relevant interface (`SchemaCreate`, `SchemaAlter`, `SchemaDrop`, or `SchemaConstrain`) in `src/types.ts`
+4. Add tests
+
+---
 
 ## Pull Request Process
 
-1. **Fork** the repository
-2. **Create a branch**: `git checkout -b feature/your-feature`
-3. **Make changes** following guidelines above
-4. **Run validation**: `npm run typecheck && npm test && npm run build`
-5. **Update CHANGELOG.md** with your changes (under `## [Unreleased]`)
-6. **Submit PR** with clear description of changes
+### Before Submitting
+
+1. **Fork** the repository and create your branch
+2. Make your changes following the guidelines above
+3. Run the full validation suite:
+   ```bash
+   npm run typecheck && npm test && npm run build && npm run pack:check
+   ```
+4. Update `CHANGELOG.md` under `## [Unreleased]`
 
 ### PR Checklist
 
 - [ ] TypeScript compiles without errors (`npm run typecheck`)
 - [ ] All tests pass (`npm test`)
-- [ ] New code has tests
-- [ ] CHANGELOG.md updated
-- [ ] No new runtime dependencies
-- [ ] No credential/parameter logging by default
-- [ ] Backward compatible (no breaking changes)
+- [ ] New functionality has tests
+- [ ] `CHANGELOG.md` updated
+- [ ] No new runtime dependencies added
+- [ ] No credential or parameter logging by default
+- [ ] Backward compatible (no breaking changes without discussion)
+- [ ] README.md updated (if user-facing)
+
+### What to Expect
+
+- A maintainer will review your PR, usually within a few days
+- You may be asked to make revisions — this is normal and collaborative
+- Once approved, a maintainer will merge and handle the release
+
+---
 
 ## Release Process (Maintainers)
 
 ```bash
-# 1. Update CHANGELOG.md with release notes
-# 2. Bump version in package.json (semver)
-# 3. Run full validation
+# 1. Move CHANGELOG entries from [Unreleased] to the new version heading
+# 2. Bump version in package.json (follow semver)
+
+# 3. Full validation
 npm run typecheck && npm test && npm run build && npm run pack:check
 
 # 4. Commit and tag
-git commit -am "chore: release v1.0.1"
-git tag v1.0.1
+git commit -am "release(database): vX.Y.Z"
+git tag database-vX.Y.Z
 
-# 5. Publish
+# 5. Publish to npm
 npm publish --access public
+
+# 6. Push
 git push origin main --tags
 ```
 
+---
+
 ## Getting Help
 
-- **Issues**: https://github.com/mayank040902/oneunit/issues
-- **Discussions**: https://github.com/mayank040902/oneunit/discussions
+- **Issues**: [github.com/mayank040902/oneunit/issues](https://github.com/mayank040902/oneunit/issues)
+- **Discussions**: [github.com/mayank040902/oneunit/discussions](https://github.com/mayank040902/oneunit/discussions)
+
+---
 
 ## Code of Conduct
 
@@ -194,4 +345,4 @@ Be respectful, inclusive, and constructive. See [GitHub Community Guidelines](ht
 
 ---
 
-**First time contributing?** Look for `good first issue` labels on GitHub, or start by improving documentation/tests.
+**First time contributing?** Look for issues labeled `good first issue` on GitHub, or start by improving tests or documentation — both are always welcome.
