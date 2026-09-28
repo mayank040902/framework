@@ -1,10 +1,15 @@
 import { describe, it } from "node:test";
+import { generateKeyPairSync, sign as signRSA } from "node:crypto";
 import assert from "node:assert/strict";
 import {
   createAuth,
   createOAuth,
   createProvider,
   getProvider,
+  encodeRefreshToken,
+  hashPassword,
+  verifyPassword,
+  needsRehash,
   apple,
   expressAdapter,
   createMemoryRefreshStore,
@@ -16,7 +21,6 @@ import {
   pkceChallenge,
   builtinProviders,
   encode,
-  verifyPassword,
   parseExpiresIn,
   ConfigurationError,
   InvalidTokenError,
@@ -763,47 +767,131 @@ describe("reserved claims cannot be overridden", () => {
   });
 });
 
-describe("Apple id_token claims", () => {
-  const b64 = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
-  const forge = (claims: Record<string, unknown>) =>
-    `${b64({ alg: "RS256", kid: "test" })}.${b64(claims)}.signature`;
-  const config = { clientId: "com.example.app" };
-  const future = () => Math.floor(Date.now() / 1000) + 3600;
+describe("Apple id_token verification", () => {
+  // A real keypair, so these tests exercise the actual RSA signature check
+  // rather than a stub. The public key is handed to the provider through the
+  // `jwks` config, which is the same injection point an application with its
+  // own key cache would use, and it keeps the suite off the network.
+  const { publicKey, privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const jwk = publicKey.export({ format: "jwk" }) as Record<string, unknown>;
+  const KID = "test-key";
+  const jwks = { keys: [{ ...jwk, kid: KID, alg: "RS256", use: "sig" }] };
+  const config = { clientId: "com.example.app", jwks };
+  const ISSUER = "https://appleid.apple.com";
+  const now = () => Math.floor(Date.now() / 1000);
 
-  it("accepts a well-formed Apple id_token", async () => {
-    const profile = await apple.fetchProfile(config, {
-      id_token: forge({ iss: "https://appleid.apple.com", aud: "com.example.app", sub: "u1", exp: future() }),
-    });
+  const b64 = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
+
+  function sign(
+    claims: Record<string, unknown>,
+    options: { kid?: string | undefined; alg?: string; key?: typeof privateKey } = {},
+  ): string {
+    const kid = "kid" in options ? options.kid : KID;
+    const header: Record<string, unknown> = { alg: options.alg ?? "RS256" };
+    if (kid !== undefined) {
+      header.kid = kid;
+    }
+    const head = b64(header);
+    const body = b64(claims);
+    const signature = signRSA("RSA-SHA256", Buffer.from(`${head}.${body}`, "utf8"), options.key ?? privateKey);
+    return `${head}.${body}.${signature.toString("base64url")}`;
+  }
+
+  const valid = (over: Record<string, unknown> = {}) => ({
+    iss: ISSUER,
+    aud: "com.example.app",
+    sub: "u1",
+    exp: now() + 3600,
+    ...over,
+  });
+
+  it("accepts a correctly signed id_token", async () => {
+    const profile = await apple.fetchProfile(config, { id_token: sign(valid()) });
     assert.equal(profile.id, "u1");
   });
 
   it("accepts an audience array containing the clientId", async () => {
     const profile = await apple.fetchProfile(config, {
-      id_token: forge({ iss: "https://appleid.apple.com", aud: ["x", "com.example.app"], sub: "u2", exp: future() }),
+      id_token: sign(valid({ aud: ["x", "com.example.app"], sub: "u2" })),
     });
     assert.equal(profile.id, "u2");
   });
 
+  it("rejects a token whose signature does not match the payload", async () => {
+    // The signature covers the header and payload, so editing the payload
+    // after signing must invalidate it. This is the attack the whole
+    // verification step exists to stop.
+    const [head, , sig] = sign(valid()).split(".") as [string, string, string];
+    const tampered = `${head}.${b64(valid({ sub: "attacker" }))}.${sig}`;
+    await assert.rejects(() => apple.fetchProfile(config, { id_token: tampered }), ProviderError);
+  });
+
+  it("rejects a token signed by a different key", async () => {
+    const other = generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey;
+    await assert.rejects(
+      () => apple.fetchProfile(config, { id_token: sign(valid(), { key: other }) }),
+      ProviderError,
+    );
+  });
+
+  it("rejects an unknown kid", async () => {
+    await assert.rejects(
+      () => apple.fetchProfile(config, { id_token: sign(valid(), { kid: "some-other-key" }) }),
+      ProviderError,
+    );
+  });
+
+  it('rejects alg: "none"', async () => {
+    const unsigned = `${b64({ alg: "none", kid: KID })}.${b64(valid())}.`;
+    await assert.rejects(() => apple.fetchProfile(config, { id_token: unsigned }), ProviderError);
+  });
+
+  it("rejects a token with no kid", async () => {
+    await assert.rejects(
+      () => apple.fetchProfile(config, { id_token: sign(valid(), { kid: undefined }) }),
+      ProviderError,
+    );
+  });
+
   it("rejects a wrong issuer", async () => {
     await assert.rejects(
-      () => apple.fetchProfile(config, { id_token: forge({ iss: "https://evil.example", aud: "com.example.app", sub: "u3" }) }),
+      () => apple.fetchProfile(config, { id_token: sign(valid({ iss: "https://evil.example" })) }),
       ProviderError,
     );
   });
 
   it("rejects an audience issued to another app", async () => {
     await assert.rejects(
-      () => apple.fetchProfile(config, { id_token: forge({ iss: "https://appleid.apple.com", aud: "com.other.app", sub: "u4" }) }),
+      () => apple.fetchProfile(config, { id_token: sign(valid({ aud: "com.other.app" })) }),
       ProviderError,
     );
   });
 
   it("rejects an expired id_token", async () => {
     await assert.rejects(
-      () => apple.fetchProfile(config, {
-        id_token: forge({ iss: "https://appleid.apple.com", aud: "com.example.app", sub: "u5", exp: Math.floor(Date.now() / 1000) - 60 }),
-      }),
+      () => apple.fetchProfile(config, { id_token: sign(valid({ exp: now() - 60 })) }),
       ProviderError,
+    );
+  });
+
+  it("rejects an id_token with no exp, rather than treating it as valid forever", async () => {
+    const { exp: _exp, ...noExp } = valid();
+    await assert.rejects(
+      () => apple.fetchProfile(config, { id_token: sign(noExp) }),
+      ProviderError,
+    );
+  });
+
+  it("rejects a malformed id_token", async () => {
+    await assert.rejects(() => apple.fetchProfile(config, { id_token: "not-a-jwt" }), ProviderError);
+  });
+
+  it("checks the signature before trusting the claims", async () => {
+    // A correctly signed token for a different app still fails on aud, which
+    // only makes sense because the payload was verified first.
+    await assert.rejects(
+      () => apple.fetchProfile(config, { id_token: sign(valid({ aud: "com.other.app" })) }),
+      /audience/,
     );
   });
 });
@@ -891,5 +979,201 @@ describe("Express adapter", () => {
     const roleDenied = makeRes();
     await requireRole("admin")({ user: { roles: ["user"] } }, roleDenied);
     assert.equal(roleDenied.statusCode, 403);
+  });
+});
+
+describe("password hashing cost is bounded", () => {
+  // Every one of these numbers is read out of a stored hash string, so each is
+  // attacker-influenced wherever an attacker can write a user row. Node's
+  // maxmem guard only covers 128 * N * r, which left keyLength and parallelism
+  // unbounded: a single crafted hash cost 25s of CPU on a default config.
+  const salt = Buffer.alloc(16).toString("base64url");
+  const crafted = (...params: [number, number, number, number]) =>
+    ["scrypt", ...params.slice(0, 4), salt, "AAAA"].join("$");
+
+  it("rejects an oversized keyLength without running scrypt", async () => {
+    const started = Date.now();
+    assert.equal(await verifyPassword("guess", crafted(16384, 8, 1, 2 ** 30)), false);
+    // The point of the bound: this used to burn ~25 seconds here.
+    assert.ok(Date.now() - started < 1000, `took ${Date.now() - started}ms, expected the bomb to be refused`);
+  });
+
+  it("rejects the other unbounded parameters", async () => {
+    for (const params of [
+      [2 ** 30, 8, 1, 64], // memory bomb
+      [16384, 2 ** 30, 1, 64], // block size bomb
+      [16384, 8, 2 ** 25, 64], // parallelism bomb
+      [2 ** 31, 8, 1, 2 ** 30],
+    ]) {
+      assert.equal(await verifyPassword("guess", crafted(params[0], params[1], params[2], params[3])), false);
+    }
+  });
+
+  it("rejects a downgrade to trivially cheap parameters", async () => {
+    // A stored hash that verifies instantly is a brute-force shortcut.
+    for (const params of [[2, 1, 1, 64], [1, 1, 1, 64], [0, 1, 1, 64]]) {
+      assert.equal(await verifyPassword("guess", crafted(params[0], params[1], params[2], params[3])), false);
+    }
+  });
+
+  it("rejects non-integer and non-power-of-two parameters", async () => {
+    assert.equal(await verifyPassword("guess", crafted(1000, 8, 1, 64)), false);
+    assert.equal(await verifyPassword("guess", crafted(16384, 8, 1, 12)), false);
+    assert.equal(await verifyPassword("guess", "scrypt$abc$8$1$64$AAAA$AAAA"), false);
+  });
+
+  it("reports a bomb hash as needing a rehash rather than a valid hash", () => {
+    assert.equal(needsRehash(crafted(2 ** 30, 8, 1, 2 ** 30)), true);
+  });
+
+  it("refuses out-of-range options at hash time with a clear error", async () => {
+    for (const options of [
+      { keyLength: 1e9 },
+      { cost: 2 ** 30 },
+      { cost: 3 },
+      { cost: 1000 },
+      { blockSize: 512 },
+      { parallelism: 1e6 },
+      { saltBytes: 9999 },
+    ]) {
+      await assert.rejects(() => hashPassword("pw", options), ValidationError);
+    }
+  });
+
+  it("still accepts legitimate cost increases inside the work budget", async () => {
+    for (const options of [{}, { cost: 32768, blockSize: 4 }, { keyLength: 128 }, { cost: 4096, parallelism: 4 }]) {
+      const hash = await hashPassword("pw", options);
+      assert.equal(await verifyPassword("pw", hash), true, `failed for ${JSON.stringify(options)}`);
+      assert.equal(await verifyPassword("other", hash), false);
+    }
+  });
+});
+
+describe("refresh tokens must be revocable", () => {
+  it("refuses a refresh token with no jti", async () => {
+    // encodeRefreshToken is a public export, so a jti-less token is reachable
+    // by anyone holding the secret. Accepting one issued a session that no
+    // revocation list could ever reach, including after logout.
+    const auth = createAuth({ secret: SECRET });
+    const jtiLess = encodeRefreshToken({ sub: "42", userId: 42, roles: ["user"] }, SECRET, { expiresIn: "30d" });
+    await assert.rejects(() => auth.refresh(jtiLess), UnauthorizedError);
+  });
+
+  it("still refuses it as an access token", async () => {
+    const auth = createAuth({ secret: SECRET });
+    const jtiLess = encodeRefreshToken({ sub: "42", userId: 42, roles: ["user"] }, SECRET, { expiresIn: "30d" });
+    await assert.rejects(() => auth.verify(jtiLess), UnauthorizedError);
+  });
+
+  it("refuses it after logout, which was previously impossible", async () => {
+    const auth = createAuth({ secret: SECRET });
+    const jtiLess = encodeRefreshToken({ sub: "42", userId: 42, roles: ["user"] }, SECRET, { expiresIn: "30d" });
+    await auth.logout((await auth.login({ id: 42 })).refreshToken);
+    await assert.rejects(() => auth.refresh(jtiLess), UnauthorizedError);
+  });
+});
+
+describe("query-string token extraction is opt-in", () => {
+  it("ignores ?access_token= by default", async () => {
+    const auth = createAuth({ secret: SECRET });
+    const { accessToken } = await auth.login({ id: 1 });
+    const request = { headers: {}, query: { access_token: accessToken } };
+    // A token in a URL lands in every access log, proxy log, browser history,
+    // and outgoing Referer header.
+    assert.equal(auth.extractToken(request), null);
+    await assert.rejects(() => auth.verifyRequest(request), UnauthorizedError);
+  });
+
+  it("reads it when explicitly enabled", async () => {
+    const auth = createAuth({ secret: SECRET });
+    const { accessToken } = await auth.login({ id: 1 });
+    const request = { headers: {}, query: { access_token: accessToken } };
+    assert.equal(auth.extractToken(request, { query: true }), accessToken);
+  });
+
+  it("still reads header and cookie tokens by default", async () => {
+    const auth = createAuth({ secret: SECRET });
+    const { accessToken } = await auth.login({ id: 1 });
+    assert.equal(auth.extractToken({ headers: { authorization: `Bearer ${accessToken}` } }), accessToken);
+    assert.equal(auth.extractToken({ headers: { cookie: `access_token=${accessToken}` } }), accessToken);
+  });
+});
+
+describe("session revocation", () => {
+  function makeStore() {
+    const versions = new Map<string, number>();
+    return {
+      versions,
+      store: {
+        getVersion: (id: string | number) => versions.get(String(id)) ?? 0,
+        bumpVersion: (id: string | number) => {
+          const next = (versions.get(String(id)) ?? 0) + 1;
+          versions.set(String(id), next);
+          return next;
+        },
+        revoked: new Set<string>(),
+        revokeSession(jti: string) {
+          this.revoked.add(jti);
+        },
+      },
+    };
+  }
+
+  it("stamps a session version and rejects the token once it is bumped", async () => {
+    const { store } = makeStore();
+    const auth = createAuth({ secret: SECRET, sessionStore: store });
+    const session = await auth.login({ id: 1, roles: ["user"] });
+
+    assert.equal(session.payload.sv, 0);
+    assert.equal((await auth.verify(session.accessToken)).sub, "1");
+
+    assert.equal(await auth.revokeAllSessions(1), true);
+    await assert.rejects(() => auth.verify(session.accessToken), UnauthorizedError);
+  });
+
+  it("stops a revoked session from minting a new access token", async () => {
+    // Without this the revocation is cosmetic: a stolen refresh token just
+    // refreshes into a working session.
+    const { store } = makeStore();
+    const auth = createAuth({ secret: SECRET, sessionStore: store });
+    const session = await auth.login({ id: 1, roles: ["user"] });
+
+    await auth.revokeAllSessions(1);
+    await assert.rejects(() => auth.refresh(session.refreshToken as string), UnauthorizedError);
+  });
+
+  it("lets a login after revocation work, and only affects that user", async () => {
+    const { store } = makeStore();
+    const auth = createAuth({ secret: SECRET, sessionStore: store });
+    await auth.login({ id: 1 });
+    await auth.revokeAllSessions(1);
+
+    const fresh = await auth.login({ id: 1 });
+    const other = await auth.login({ id: 2 });
+    assert.equal(fresh.payload.sv, 1);
+    assert.equal((await auth.verify(fresh.accessToken)).sub, "1");
+    assert.equal((await auth.verify(other.accessToken)).sub, "2");
+  });
+
+  it("normalizes numeric and string user ids to the same version", async () => {
+    const { store } = makeStore();
+    const auth = createAuth({ secret: SECRET, sessionStore: store });
+    const session = await auth.login({ id: 42 });
+    await auth.revokeAllSessions("42");
+    await assert.rejects(() => auth.verify(session.accessToken), UnauthorizedError);
+  });
+
+  it("leaves tokens unchanged and revocation a no-op when no store is configured", async () => {
+    const auth = createAuth({ secret: SECRET });
+    const session = await auth.login({ id: 1 });
+    assert.equal(session.payload.sv, undefined);
+    assert.equal((await auth.verify(session.accessToken)).sub, "1");
+    assert.equal(await auth.revokeAllSessions(1), false, "must not silently claim to have revoked");
+  });
+
+  it("refuses to let a caller forge a session version", async () => {
+    const { store } = makeStore();
+    const auth = createAuth({ secret: SECRET, sessionStore: store });
+    await assert.rejects(() => auth.login({ id: 1 }, { additionalClaims: { sv: 0 } }), ValidationError);
   });
 });

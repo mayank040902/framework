@@ -184,6 +184,12 @@ if (needsRehash(passwordHash, { cost: 32768 })) {
 
 With a user store, `auth.register()` and `auth.loginWithPassword()` hash and verify for you.
 
+Cost parameters travel inside the hash so they can be raised later, and they are
+range-checked before any work happens — a hash carrying hostile parameters
+returns `false` rather than being computed. See
+[ARCHITECTURE.md](./ARCHITECTURE.md#stored-parameters-are-treated-as-hostile-input)
+for the bounds and why they are needed.
+
 ```js
 const auth = createAuth({
   secret: process.env.AUTH_SECRET,
@@ -383,7 +389,16 @@ const { express, fastify, koa, uws } = createAdapters(auth);
 const claims = await auth.verifyRequest(req);
 ```
 
-Tokens are read from `Authorization: Bearer`, an `access_token` cookie, or `?access_token=`.
+Tokens are read from `Authorization: Bearer` or an `access_token` cookie.
+
+The query string is **not** read by default. A token in a URL ends up in access
+logs, proxy logs, browser history, and the `Referer` header sent to third
+parties. Opt in per call for flows that cannot set a header, such as an
+`EventSource` or a file download:
+
+```js
+await auth.verifyRequest(req, { query: true });
+```
 
 You can also extract the bearer token yourself:
 
@@ -438,6 +453,42 @@ single atomic operation (`GETDEL` in Redis, a `DELETE ... RETURNING` in SQL).
 `auth.refresh()` and `auth.logout()` throw `ConfigurationError` rather than
 report a logout that never happened. A store implementing only `consume()` is
 enough for both rotation and logout.
+
+## Sessions and revocation
+
+`auth.logout()` revokes one refresh token. It cannot un-sign an access token
+that was already issued — that token stays valid until it expires, and its
+`roles` and `permissions` are a snapshot from login. So a role change is not
+retroactive either.
+
+To invalidate a session immediately, everywhere, configure a `sessionStore`.
+Tokens then carry a session version that is checked on every `verify()` and
+`refresh()`:
+
+```js
+const auth = createAuth({
+  secret,
+  sessionStore: {
+    getVersion: (userId) => db.getVersion(userId) ?? 0,
+    bumpVersion: (userId) => db.incrementVersion(userId),
+  },
+});
+
+await auth.revokeAllSessions(userId); // every device, access and refresh
+```
+
+This costs one store read per verification, which is why it is opt-in. Without
+a `sessionStore`, `revokeAllSessions()` returns `false` rather than appearing
+to succeed. If you would rather stay stateless, set a short `accessTokenTtl` and
+accept the window instead.
+
+### Custom session store
+
+| Method | Required | Purpose |
+| --- | --- | --- |
+| `getVersion(userId)` | yes | Current version for a user; `undefined` counts as `0` |
+| `bumpVersion(userId)` | for `revokeAllSessions` | Invalidate every session for a user |
+| `revokeSession(jti)` | for `revokeSession` | Invalidate one session by its jti |
 
 ### Access token claims
 

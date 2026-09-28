@@ -4,6 +4,88 @@ All notable changes to this package are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2.0.1
+
+Security fixes and session revocation. One breaking change: tokens are no longer
+read from the query string unless you opt in.
+
+### Security
+
+- **Password hashing parameters taken from a stored hash are now bounded.** The
+  `N`, `r`, `p`, and `keyLength` fields are parsed out of the stored hash string,
+  so they are attacker-influenced wherever an attacker can write a user row.
+  Node's own `maxmem` guard only covers the `128 * N * r` memory block, which
+  left the other two unbounded: a single stored hash of
+  `scrypt$16384$8$1$1073741824$...` cost **25.3 seconds of CPU** on a default
+  configuration, repeatable on every login attempt, for one string of attacker
+  input. All four parameters are now range-checked before scrypt runs, on both
+  the hashing and the verifying path, and an out-of-range hash is reported as
+  malformed instead of computed. `N` must additionally be a power of two and
+  `N * r` must fit in 24MB of working memory, so a parameter set the platform
+  would reject is refused up front rather than throwing from inside OpenSSL.
+  A floor is enforced too: a stored hash asking for trivial work (`N=2, r=1`)
+  verifies instantly and is a brute-force shortcut, so it is rejected.
+- **Apple `id_token` signatures are now verified.** The claims in an Apple
+  `id_token` are now checked against Apple's published JWKS before anything is
+  read out of them. Previously the payload was decoded and trusted, so
+  `iss`, `aud`, and `exp` were only as trustworthy as the token's own contents:
+  anyone able to influence the token response could choose the subject, the
+  audience, and the expiry. Verification pins `RS256` and requires a `kid`, so
+  `alg: "none"` and JWT algorithm-confusion are refused. Keys are cached for an
+  hour and an unknown `kid` triggers one refetch, so a routine Apple key
+  rotation is invisible to callers. `exp` is now required rather than checked
+  when present, since a token with no usable `exp` was previously treated as
+  never expiring.
+- **Refresh tokens without a `jti` are refused.** `refresh()` only consulted the
+  refresh store when the token carried a `jti`, so a token without one skipped
+  the store entirely and could never be revoked — it stayed valid until it
+  expired and survived logout. `encodeRefreshToken` is a public export, so this
+  was reachable by anyone holding the secret. A missing `jti` is now an
+  `UnauthorizedError`. Refresh tokens minted by `login()` always have one, so
+  this only affects tokens you built yourself.
+- **Tokens are no longer read from the query string by default.**
+  `extractToken()` fell through to `?access_token=` or `?token=` on every
+  request, putting the token in access logs, proxy logs, browser history, and
+  the `Referer` header sent to third parties. Pass `{ query: true }` to restore
+  it, for flows that genuinely cannot set a header (EventSource, file
+  download). Header and cookie extraction are unchanged and remain the default.
+
+### Added
+
+- **Session revocation.** Configure a `sessionStore` and tokens carry an `sv`
+  claim, so a session can be invalidated before its token expires:
+
+  ```js
+  const auth = createAuth({
+    secret,
+    sessionStore: {
+      getVersion: (userId) => db.getVersion(userId) ?? 0,
+      bumpVersion: (userId) => db.incrementVersion(userId),
+      revokeSession: (jti) => db.deleteSession(jti),
+    },
+  });
+
+  await auth.revokeAllSessions(userId); // every device
+  await auth.revokeSession(jti);        // one session
+  ```
+
+  `refresh()` is covered as well as `verify()`, so a revoked session cannot mint
+  a fresh access token. This is opt-in and costs one store read per
+  verification; without a `sessionStore`, `revokeAllSessions()` returns `false`
+  rather than silently appearing to succeed. Numeric and string user ids
+  resolve to the same version.
+
+### Changed
+
+- `verifyIdTokenSignature`, `jwksUrl`, `jwks`, and `jwksCacheTtlMs` are
+  available on the Apple provider for key-cache control. Signature verification
+  is on by default; `verifyIdTokenSignature: false` exists for test harnesses
+  and should not be used in production.
+- `hashPassword` now throws `ValidationError` for out-of-range parameters
+  instead of letting the error escape from OpenSSL.
+- Tests run entirely offline: the Apple suite signs real tokens with a generated
+  RSA key pair rather than reaching Apple's JWKS endpoint.
+
 ## 2.0.0
 
 Security hardening. Every breaking change below is a case where the previous

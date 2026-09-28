@@ -105,7 +105,20 @@ describe("uWebSockets.js adapter", () => {
     assert.equal(JSON.parse(res.body ?? "null").userId, 21);
   });
 
-  it("authenticates from query string", async () => {
+  it("ignores the query string unless it is opted into", async () => {
+    const auth = createAuth({ secret: SECRET });
+    const { accessToken } = await auth.login({ id: 22, roles: ["user"] });
+    const { authenticate } = uwsAdapter(auth);
+    let rejected: unknown = null;
+
+    await authenticate()((_res, _req, _snapshot?: UwsRequestSnapshot) => {
+      rejected = new Error("should not have authenticated");
+    })(createMockRes(), createMockReq({ query: `access_token=${accessToken}` }));
+
+    assert.equal(rejected, null, "the callback must not run for an unauthenticated request");
+  });
+
+  it("authenticates from query string when opted in", async () => {
     const auth = createAuth({ secret: SECRET });
     const { accessToken } = await auth.login({ id: 22, roles: ["user"] });
     const { authenticate } = uwsAdapter(auth);
@@ -113,7 +126,7 @@ describe("uWebSockets.js adapter", () => {
     const req = createMockReq({ query: `access_token=${accessToken}` });
     let userId: string | number | null = null;
 
-    await authenticate()((_res, _req, snapshot?: UwsRequestSnapshot) => {
+    await authenticate({ query: true })((_res, _req, snapshot?: UwsRequestSnapshot) => {
       userId = snapshot?.user?.userId ?? null;
     })(res, req);
 

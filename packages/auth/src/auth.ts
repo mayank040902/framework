@@ -19,6 +19,7 @@ import type {
   RBACOptions,
   RefreshRecord,
   RefreshStore,
+  SessionStore,
   RequestLike,
   RoleDefinition,
   Secret,
@@ -58,6 +59,10 @@ const RESERVED_CLAIMS: ReadonlySet<string> = new Set([
   "iat",
   "nbf",
   "jti",
+  // Session version. Written by the library from the SessionStore and compared
+  // on every verification, so it must not be settable by an extractor or by
+  // additionalClaims.
+  "sv",
 ]);
 
 type ClaimExtractor = (user: UserRecord) => unknown;
@@ -74,6 +79,7 @@ export class Auth {
   trustUserPermissions: boolean;
   userStore: UserStore | null;
   refreshStore: RefreshStore;
+  sessionStore?: SessionStore;
   onLogin: AuthOptions["onLogin"];
   onLink: AuthOptions["onLink"];
   rbac: RBAC;
@@ -102,6 +108,7 @@ export class Auth {
 
     this.userStore = options.userStore ?? null;
     this.refreshStore = options.refreshStore ?? createMemoryRefreshStore();
+    this.sessionStore = options.sessionStore;
     this.onLogin = options.onLogin;
     this.onLink = options.onLink;
 
@@ -180,6 +187,13 @@ export class Auth {
       ...additional,
     };
 
+    // Only stamped when a SessionStore is configured, so tokens are unchanged
+    // for the many deployments that do not opt into session revocation.
+    const sessionVersion = await this.currentSessionVersion(user.id);
+    if (sessionVersion !== undefined) {
+      payload.sv = sessionVersion;
+    }
+
     const subject = String(user.id);
 
     const accessToken = encodeAccessToken(payload, this.secret, {
@@ -194,7 +208,7 @@ export class Auth {
     if (options.refresh !== false) {
       const jwtid = randomToken(16);
       refreshToken = encodeRefreshToken(
-        { sub: subject, userId: user.id, roles },
+        { sub: subject, userId: user.id, roles, ...(sessionVersion !== undefined && { sv: sessionVersion }) },
         this.refreshSecret,
         {
           audience: this.audience,
@@ -297,6 +311,10 @@ export class Auth {
       clockTolerance: options.clockTolerance ?? this.clockTolerance,
     });
 
+    // Checked after the signature, so `sv` is a claim this library signed
+    // rather than a number the caller supplied.
+    await this.assertSessionActive(claims);
+
     // A refresh token is signed with the same secret and would otherwise verify
     // as a bearer credential, turning a 7-day token into a 7-day access token.
     if (claims.typ === "refresh" && options.acceptTokenType !== "refresh") {
@@ -334,8 +352,16 @@ export class Auth {
       return cookies[cookieName];
     }
 
-    const query = collectQuery(req);
-    return query.access_token ?? query.token ?? null;
+    // Opt-in only. Reading the query string by default put the token in every
+    // access log, proxy log, browser history entry, and outgoing Referer header
+    // on every request, which is a far wider blast radius than a header or a
+    // cookie.
+    if (options.query) {
+      const query = collectQuery(req);
+      return query.access_token ?? query.token ?? null;
+    }
+
+    return null;
   }
 
   async refresh(refreshToken: string, options: LoginOptions = {}): Promise<LoginResult> {
@@ -354,7 +380,18 @@ export class Auth {
       throw new UnauthorizedError("Not a refresh token");
     }
 
-    if (claims.jti) {
+    if (!claims.jti) {
+      // A refresh token without a jti has no store entry, so there is nothing
+      // to consume and nothing to revoke: it would stay valid until it expired
+      // and would survive logout entirely. encodeRefreshToken is public, so
+      // this is reachable by anyone holding the secret; refuse it rather than
+      // mint a session that no revocation list can ever reach.
+      throw new UnauthorizedError(
+        "Refresh token is missing a jti and cannot be revoked; mint refresh tokens through login()",
+      );
+    }
+
+    {
       // Consume the token in a single store operation when the store supports
       // it, so two concurrent refreshes cannot both pass the validity check.
       if (typeof this.refreshStore.consume === "function") {
@@ -376,6 +413,12 @@ export class Auth {
       id: (claims.userId ?? claims.sub) as string | number,
       roles: claims.roles,
     };
+
+    // Before the store is touched. A revoked session must not be able to
+    // consume its refresh token and mint a fresh access token, which would
+    // make revokeAllSessions pointless for anyone holding a stolen one.
+    await this.assertSessionActive(claims);
+
     if (this.userStore?.findById) {
       user = await this.userStore.findById(user.id) ?? user;
     }
@@ -393,6 +436,57 @@ export class Auth {
         "The configured refreshStore cannot revoke tokens; implement revoke() so refresh rotation can invalidate the presented token",
       );
     }
+  }
+
+  /**
+   * The user's current session version, or undefined when no SessionStore is
+   * configured and the feature is therefore off.
+   */
+  private async currentSessionVersion(userId: string | number): Promise<number | undefined> {
+    if (!this.sessionStore) {
+      return undefined;
+    }
+    const version = await this.sessionStore.getVersion(userId);
+    return version ?? 0;
+  }
+
+  /**
+   * Rejects a token whose session version has been superseded. A token minted
+   * before any SessionStore existed carries no `sv`, and is treated as
+   * version 0 so that enabling the feature does not invalidate sessions that
+   * were already in flight.
+   */
+  private async assertSessionActive(claims: JwtPayload): Promise<void> {
+    if (!this.sessionStore) {
+      return;
+    }
+    const current = await this.currentSessionVersion(claims.userId ?? claims.sub ?? "");
+    const presented = typeof claims.sv === "number" ? claims.sv : 0;
+    if (presented !== current) {
+      throw new UnauthorizedError("Session has been revoked");
+    }
+  }
+
+  /**
+   * Invalidates every session currently issued to a user, across all devices.
+   * Returns false when no SessionStore is configured, since there is then
+   * nothing to bump and the call would silently do nothing.
+   */
+  async revokeAllSessions(userId: string | number): Promise<boolean> {
+    if (!this.sessionStore?.bumpVersion) {
+      return false;
+    }
+    await this.sessionStore.bumpVersion(userId);
+    return true;
+  }
+
+  /** Invalidates a single session by the jti of its refresh token. */
+  async revokeSession(jti: string): Promise<boolean> {
+    if (!this.sessionStore?.revokeSession) {
+      return false;
+    }
+    await this.sessionStore.revokeSession(jti);
+    return true;
   }
 
   async revoke(refreshToken?: string | null): Promise<boolean> {

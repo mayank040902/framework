@@ -149,6 +149,57 @@ logout that never happened. For logout the two are interchangeable — both remo
 one id — so a `consume`-only store supports both operations. Rotation is stricter:
 having reached that path, `consume` is already absent, so `revoke` is required.
 
+### What revocation does and does not cover
+
+A refresh token is a revocable record. An access token is not — it is a signed
+assertion that is checked and discarded, so nothing can un-sign it. That
+distinction is worth being explicit about, because it determines what an
+operator can promise when they say "log this user out".
+
+| Action | Effect on a refresh token | Effect on an already-issued access token |
+| :--- | :--- | :--- |
+| `logout(refreshToken)` | Revoked immediately | Still valid until it expires |
+| `revokeAllSessions(userId)` | All revoked immediately | All rejected immediately |
+| Role or permission change | Refreshed tokens pick up the change on next `refresh()` | Still carry the old `roles` and `permissions` until expiry |
+| `authTime` / "log out everywhere" | — | — |
+
+So the row that surprises people is the third: **RBAC changes are not
+retroactive.** An access token's `roles` and `permissions` are a snapshot taken
+at login. Removing a role from a user record does not strip it from tokens
+already in the wild, and `permissions` is compared by `rbac.can()` against those
+claims, so the stale grant still authorizes. The window is bounded by
+`accessTokenTtl`; the fix for a tighter bound is a shorter TTL, not a different
+call.
+
+`revokeAllSessions()` closes that window, which is what `SessionStore` is for.
+It stamps a session version into each token and compares on every `verify()`
+and `refresh()`:
+
+```js
+const auth = createAuth({
+  secret,
+  sessionStore: {
+    getVersion: (userId) => db.getVersion(userId) ?? 0,
+    bumpVersion: (userId) => db.incrementVersion(userId),
+  },
+});
+
+await auth.revokeAllSessions(userId); // access + refresh, everywhere
+```
+
+Two things to know before configuring one:
+
+- It costs **one store read per verification**, on the request path. That is why
+  it is opt-in rather than always on, and why for a stateless deployment the
+  usual answer is a short `accessTokenTtl` instead.
+- A token minted before a `sessionStore` was configured carries no `sv` and is
+  treated as version `0`, so adding one does not invalidate sessions that are
+  already in flight. Bump the version to `1` if you want a clean cutover.
+
+Without a `sessionStore`, `revokeAllSessions()` returns `false`. It does not
+throw and it does not pretend to have worked, because a logout that silently
+does nothing is the failure this package tries hardest to avoid.
+
 ## Trust boundaries
 
 The package draws a hard line between values it derived and values it was
@@ -276,9 +327,39 @@ scrypt$N$r$p$keyLength$salt$hash
 user store implements `updatePassword`.
 
 Verification is constant-time via `timingSafeEqual`, and returns `false` rather
-than throwing for any malformed or unparsable hash. Cost parameters are read
-from the stored hash, so Node's own `maxmem` limit is what bounds a hostile
-value — do not treat the hash column as attacker-controlled storage.
+than throwing for any malformed or unparsable hash.
+
+### Stored parameters are treated as hostile input
+
+`N`, `r`, `p`, and `keyLength` travel inside the hash, which means they are
+attacker-influenced anywhere an attacker can write a user row: a SQL injection
+somewhere else, a restored backup, a bulk import, a support tool. They are
+range-checked before scrypt is called, on both the hashing and the verifying
+path.
+
+This matters because Node's `maxmem` guard only covers the `128 * N * r` memory
+block. `keyLength` and `p` sit outside it, so before these checks a single
+stored hash of `scrypt$16384$8$1$1073741824$...` cost 25.3 seconds of CPU on a
+default configuration — repeatable, on every login attempt, from one string.
+
+| Parameter | Constraint |
+| :--- | :--- |
+| `N` (`cost`) | power of two, `[2, 2^20]` |
+| `r` (`blockSize`) | `[1, 32]` |
+| `N * r` | `[2^12, 196608]` — 24MB of working memory |
+| `p` (`parallelism`) | `[1, 16]` |
+| `keyLength` | `[16, 128]` |
+| `saltBytes` | `[8, 64]` |
+
+`N * r` is capped rather than `N` alone, because memory is the product, and the
+ceiling is set below Node's 32MB limit so a hash the library accepts is one the
+platform can actually run. `N * r` is floored as well: a stored hash asking for
+trivial work (`N=2, r=1`) verifies instantly, which is a brute-force shortcut
+rather than a valid hash.
+
+A hash outside these bounds is reported as malformed and never computed.
+`hashPassword()` throws `ValidationError` for the same reason, instead of
+letting OpenSSL's error escape.
 
 ## OAuth
 
@@ -315,18 +396,35 @@ the access token, so the **provider itself** verifies the identity. Those are
 server-verified by construction.
 
 `apple` is the exception: Sign in with Apple returns the profile inside the
-`id_token` from the code exchange, so the claims are read locally. `iss`,
-`aud` (against your `clientId`), and `exp` are validated, and a mismatch throws
-`ProviderError`.
+`id_token` from the code exchange, so the claims are read locally. The token is
+verified before any claim is read out of it:
 
-**The `id_token` signature is not verified.** No JWKS fetch, no RS256 check.
-This is not reachable through `loginWithOAuth()`, because the token is always
-obtained by this library from Apple over TLS using your `clientSecret` — the
-caller only ever supplies a `code`. It matters if you ever forward an
-`id_token` from a native app or another service into this code path, where a
-forged token would be accepted. If you do that, verify the signature against
-`https://appleid.apple.com/auth/keys` and check `nonce` before calling
-`loginWithOAuth()`.
+- the **RS256 signature** is checked against Apple's published JWKS, with the
+  algorithm pinned to `RS256` and a `kid` required;
+- `iss`, `aud` (against your `clientId`), and `exp` are then checked, in that
+  order, and a mismatch throws `ProviderError`.
+
+The order matters. Claims inside a JWT are unauthenticated until the signature
+is checked, so validating `iss` or `aud` first only proves the payload says what
+the attacker wants it to say.
+
+Keys are fetched from `https://appleid.apple.com/auth/keys` and cached for an
+hour. An unknown `kid` triggers one refetch before failing, which is what makes
+a routine Apple key rotation invisible to callers. You can supply keys yourself
+if you already maintain a cache, or if you run in an environment without
+outbound network access:
+
+```js
+// Use your own key source instead of Apple's endpoint.
+const apple = { clientId, jwks: () => myKeyCache.get("apple") };
+```
+
+`exp` is **required**. A token without a numeric `exp` is rejected rather than
+treated as never expiring.
+
+> `verifyIdTokenSignature: false` disables the signature check. It exists for
+> test harnesses. Do not use it in production — without it, anyone who can
+> influence the token response chooses the user.
 
 A profile must carry a stable subject id. Without one, the fallback user id
 would be `` `${provider}:${profile.id}` `` and every user of that provider would
@@ -457,6 +555,12 @@ one, that test should fail.
 12. Hostile scrypt parameters return `false` rather than throwing or hanging
 13. RBAC inheritance cycles terminate, and `can()` denies an empty permission list
 14. Extractors and `additionalClaims` cannot set a reserved identity or permission claim
+15. A stored hash cannot make `verifyPassword()` do unbounded work
+16. A refresh token with no `jti` is refused, so every refresh is revocable
+17. The query string is not read for a token unless `query: true`
+18. An Apple `id_token` signature is verified before any claim is read from it
+19. `revokeAllSessions()` stops both `verify()` and `refresh()` for that user
+20. `revokeAllSessions()` returns `false` when no `SessionStore` is configured
 
 ## Related
 

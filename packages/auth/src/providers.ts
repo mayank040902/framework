@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, createPublicKey, randomBytes, verify as verifySignature } from "node:crypto";
 import { ProviderError, ValidationError } from "./errors.js";
 import type {
   AuthorizationUrlOptions,
@@ -357,6 +357,133 @@ export const discord = createProvider({
 });
 
 const APPLE_ISSUER = "https://appleid.apple.com";
+const APPLE_JWKS_URL = "https://appleid.apple.com/auth/keys";
+const DEFAULT_JWKS_TTL_MS = 60 * 60 * 1000;
+
+/**
+ * Fetched signing keys, shared across providers and kept past a single request
+ * so a burst of logins does not turn into a burst of JWKS traffic. An entry
+ * whose kid is missing triggers a single refetch before failing, which is what
+ * makes a routine Apple key rotation invisible to callers.
+ */
+const jwksCache = new Map<string, { set: Record<string, unknown>; expiresAt: number }>();
+
+function clearJwksCache(url: string): void {
+  jwksCache.delete(url);
+}
+
+async function loadJwks(url: string, ttlMs: number, refresh: boolean): Promise<Record<string, unknown>> {
+  if (!refresh) {
+    const cached = jwksCache.get(url);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.set;
+    }
+  }
+
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new ProviderError(`Could not fetch signing keys from ${url}: HTTP ${response.status}`);
+  }
+  const set = (await response.json()) as Record<string, unknown>;
+  jwksCache.set(url, { set, expiresAt: Date.now() + ttlMs });
+  return set;
+}
+
+async function resolveJwks(config: OAuthProviderConfig): Promise<Record<string, unknown>> {
+  if (typeof config.jwks === "function") {
+    return (await config.jwks()) as Record<string, unknown>;
+  }
+  if (config.jwks && typeof config.jwks === "object") {
+    return config.jwks;
+  }
+  const url = typeof config.jwksUrl === "string" ? config.jwksUrl : APPLE_JWKS_URL;
+  const ttl = typeof config.jwksCacheTtlMs === "number" ? config.jwksCacheTtlMs : DEFAULT_JWKS_TTL_MS;
+  return loadJwks(url, ttl, false);
+}
+
+function findJwk(set: Record<string, unknown>, kid: string): Record<string, unknown> | undefined {
+  const keys = set.keys;
+  if (!Array.isArray(keys)) {
+    return undefined;
+  }
+  return keys.find((entry): entry is Record<string, unknown> =>
+    typeof entry === "object" && entry !== null && (entry as { kid?: unknown }).kid === kid);
+}
+
+/**
+ * Verifies the RS256 signature over an id_token's header and payload against
+ * the provider's published keys, and returns the decoded payload.
+ *
+ * The claims inside a token are unauthenticated until this runs. Checking `iss`
+ * or `aud` on an unverified payload only proves the payload says what the
+ * attacker wants it to say, so the signature has to be checked first and the
+ * claim checks read the verified bytes.
+ */
+async function verifyIdToken(idToken: string, config: OAuthProviderConfig, providerName: string): Promise<Record<string, unknown>> {
+  const parts = idToken.split(".");
+  if (parts.length !== 3) {
+    throw new ProviderError(`${providerName} id_token is not a well-formed JWT`);
+  }
+  const [encodedHeader, encodedPayload, encodedSignature] = parts as [string, string, string];
+
+  let header: { alg?: unknown; kid?: unknown };
+  let payload: Record<string, unknown>;
+  try {
+    header = JSON.parse(Buffer.from(encodedHeader, "base64url").toString("utf8")) as { alg?: unknown; kid?: unknown };
+    payload = JSON.parse(Buffer.from(encodedPayload, "base64url").toString("utf8")) as Record<string, unknown>;
+  } catch {
+    throw new ProviderError(`${providerName} id_token has undecodable segments`);
+  }
+
+  if (config.verifyIdTokenSignature === false) {
+    return payload;
+  }
+
+  // Pinning the algorithm is what stops the classic JWT confusion attack: a
+  // token declaring "alg": "none", or an HMAC algorithm keyed with the RSA
+  // public key, would otherwise be accepted.
+  if (header.alg !== "RS256") {
+    throw new ProviderError(`${providerName} id_token must be signed with RS256, got ${String(header.alg)}`);
+  }
+  if (typeof header.kid !== "string" || header.kid.length === 0) {
+    throw new ProviderError(`${providerName} id_token is missing a kid`);
+  }
+
+  const ttl = typeof config.jwksCacheTtlMs === "number" ? config.jwksCacheTtlMs : DEFAULT_JWKS_TTL_MS;
+  const url = typeof config.jwksUrl === "string" ? config.jwksUrl : APPLE_JWKS_URL;
+  const usesCache = typeof config.jwks !== "function" && typeof config.jwks !== "object";
+
+  let jwk = findJwk(await resolveJwks(config), header.kid);
+  if (!jwk && usesCache) {
+    // An unknown kid is either a rotation or an attack. Refetch once, since a
+    // rotation is the common case and the attacker has to survive the retry.
+    clearJwksCache(url);
+    jwk = findJwk(await loadJwks(url, ttl, true), header.kid);
+  }
+  if (!jwk) {
+    throw new ProviderError(`${providerName} id_token was signed by an unknown key (kid: ${header.kid})`);
+  }
+
+  let publicKey;
+  try {
+    publicKey = createPublicKey({ key: jwk, format: "jwk" });
+  } catch {
+    throw new ProviderError(`${providerName} id_token signing key could not be read`);
+  }
+
+  const signed = Buffer.from(`${encodedHeader}.${encodedPayload}`, "utf8");
+  let signature: Buffer;
+  try {
+    signature = Buffer.from(encodedSignature, "base64url");
+  } catch {
+    throw new ProviderError(`${providerName} id_token has an undecodable signature`);
+  }
+  if (signature.length === 0 || !verifySignature("RSA-SHA256", signed, publicKey, signature)) {
+    throw new ProviderError(`${providerName} id_token signature is invalid`);
+  }
+
+  return payload;
+}
 
 export const apple = createProvider({
   id: "apple",
@@ -365,16 +492,17 @@ export const apple = createProvider({
   tokenUrl: "https://appleid.apple.com/auth/token",
   scopes: ["name", "email"],
   extraAuthParams: { response_mode: "form_post" },
-  parseProfile(tokens, config) {
+  async parseProfile(tokens, config) {
     const idToken = tokens?.id_token;
     if (!idToken) {
       return { provider: "apple", raw: tokens };
     }
 
     // Apple is the only built-in provider whose profile comes from a token in
-    // the response rather than a server-side userinfo call, so the claims are
-    // checked here instead. See ARCHITECTURE.md for the signature caveat.
-    const payload = JSON.parse(Buffer.from(idToken.split(".")[1], "base64url").toString("utf8")) as Record<string, unknown>;
+    // the response rather than a server-side userinfo call, so the token is
+    // verified here. See ARCHITECTURE.md for why the signature is checked even
+    // though the token usually arrives over a server-side TLS exchange.
+    const payload = await verifyIdToken(idToken, config, "Apple");
 
     const iss = typeof payload.iss === "string" ? payload.iss : undefined;
     if (iss !== APPLE_ISSUER) {
@@ -390,10 +518,19 @@ export const apple = createProvider({
       }
     }
 
-    if (typeof payload.exp === "number" && payload.exp <= Math.floor(Date.now() / 1000)) {
+    // Required rather than checked when present. A token with no usable exp
+    // would otherwise be treated as never expiring, which turns a leaked token
+    // into permanent access.
+    const exp = payload.exp;
+    if (typeof exp !== "number" || !Number.isFinite(exp)) {
+      throw new ProviderError("Apple id_token is missing a numeric exp claim");
+    }
+    if (exp <= Math.floor(Date.now() / 1000)) {
       throw new ProviderError("Apple id_token has expired");
     }
 
+    // Apple only returns these on the first authorization for an account, so
+    // callers must not depend on them being present.
     return {
       provider: "apple",
       id: payload.sub as string | undefined,

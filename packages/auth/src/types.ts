@@ -47,6 +47,8 @@ export type JwtPayload = Record<string, unknown> & {
   name?: string;
   roles?: string[];
   permissions?: string[];
+  /** Session version, written only when a SessionStore is configured. */
+  sv?: number;
 };
 
 export type Secret = string | Buffer;
@@ -128,6 +130,32 @@ export interface OAuthProviderConfig {
   userInfoHeaders?: Record<string, string>;
   tokenAuthMethod?: TokenAuthMethod;
   provider?: OAuthProvider | (Pick<OAuthProvider, "id"> & Partial<OAuthProvider>);
+  /**
+   * Where to fetch id_token signing keys. Defaults to Apple's published JWKS
+   * endpoint. Only used by providers that carry an id_token in the token
+   * response.
+   */
+  jwksUrl?: string;
+  /**
+   * Supply signing keys directly instead of fetching them. Useful for tests, for
+   * offline environments, and for applications that already maintain their own
+   * JWKS cache. Accepts a JWK set or a function returning one.
+   */
+  jwks?: Record<string, unknown> | (() => Promise<Record<string, unknown>> | Record<string, unknown>);
+  /**
+   * How long fetched keys are reused before being refreshed, in milliseconds.
+   * Defaults to one hour. Apple rotates its keys infrequently, and an unknown
+   * `kid` always triggers one immediate refetch regardless of this.
+   */
+  jwksCacheTtlMs?: number;
+  /**
+   * Set to false to skip id_token signature verification. Verification is on by
+   * default and should stay on: an id_token is a bearer assertion of identity,
+   * and accepting one without checking Apple's signature means anyone who can
+   * influence the token response can choose the user. Only turn this off in a
+   * test harness, never in production.
+   */
+  verifyIdTokenSignature?: boolean;
   [key: string]: unknown;
 }
 
@@ -294,6 +322,25 @@ export interface LoginResult {
   };
 }
 
+export interface SessionStore {
+  /**
+   * The user's current session version. Tokens are minted carrying the value
+   * that was current at login, and are rejected once it no longer matches, so
+   * bumping the number logs out every session issued before that moment.
+   * Returning `undefined` or `null` is treated as version 0.
+   */
+  getVersion(userId: string | number): Promise<number | undefined | null> | number | undefined | null;
+  /**
+   * Invalidate every session currently issued to this user and return the new
+   * version. Called by `revokeAllSessions`.
+   */
+  bumpVersion?(userId: string | number): Promise<number> | number;
+  /**
+   * Invalidate one session by its jti. Called by `revokeSession`.
+   */
+  revokeSession?(jti: string): Promise<void> | void;
+}
+
 export interface AuthOptions {
   secret: Secret;
   refreshSecret?: Secret;
@@ -312,6 +359,13 @@ export interface AuthOptions {
   trustUserPermissions?: boolean;
   userStore?: UserStore;
   refreshStore?: RefreshStore;
+  /**
+   * Enables session revocation. Configuring one adds an `sv` claim to minted
+   * tokens and costs one store read per verification, which is why it is
+   * opt-in: without it, revoking a refresh token only invalidates that one
+   * session, and an already-issued access token stays valid until it expires.
+   */
+  sessionStore?: SessionStore;
   rbac?: import("./rbac.js").RBAC | RBACOptions;
   roles?: RBACOptions | Record<string, RoleDefinition> | Array<string | RoleDefinition>;
   oauth?: import("./oauth.js").OAuth | OAuthOptions;
@@ -336,6 +390,14 @@ export interface RequestLike {
 
 export interface ExtractTokenOptions {
   cookie?: string;
+  /**
+   * Allow reading the token from `?access_token=` or `?token=`. Off by default:
+   * a token in a URL is written to access logs, proxy logs, browser history, and
+   * the Referer header sent to third parties, none of which a header or cookie
+   * token leaks into. Only enable it for flows that genuinely cannot set a
+   * header, such as an EventSource or a file download.
+   */
+  query?: boolean;
   optional?: boolean;
   passthrough?: boolean;
   audience?: string | string[];
