@@ -1,13 +1,13 @@
-# @bootstrap-framework/database
+# @oneunit/database
 
 Standalone PostgreSQL client for Node.js. Connection pooling, parameterized queries, transactions, streaming, schema helpers, models, and migrations — built on [`pg`](https://node-postgres.com), [`pg-cursor`](https://github.com/brianc/node-pg-cursor), and [`pg-query-stream`](https://github.com/brianc/node-pg-query-stream).
 
-Monorepo: https://github.com/mayank040902/framework
+Monorepo: https://github.com/mayank040902/oneunit
 
 No sibling-package runtime dependencies. Install it in any Node.js project.
 
 ```bash
-npm install @bootstrap-framework/database
+npm install @oneunit/database
 ```
 
 Requires **Node.js 20+**.
@@ -17,7 +17,7 @@ Requires **Node.js 20+**.
 ## Quick start
 
 ```javascript
-import { createDatabase } from "@bootstrap-framework/database";
+import { createDatabase } from "@oneunit/database";
 
 const db = createDatabase();
 
@@ -73,7 +73,7 @@ All environment access is centralized. Explicit options always win over environm
 Copy [`.env.example`](.env.example) and fill in values for local development.
 
 ```javascript
-import { loadDatabaseConfig, createDatabase } from "@bootstrap-framework/database";
+import { loadDatabaseConfig, createDatabase } from "@oneunit/database";
 
 const config = loadDatabaseConfig({ max: 8 });
 const db = createDatabase(config);
@@ -174,7 +174,7 @@ Supported isolation levels: `READ UNCOMMITTED`, `READ COMMITTED`, `REPEATABLE RE
 ## SQL fragments and query builder
 
 ```javascript
-import { createDatabase, sql } from "@bootstrap-framework/database";
+import { createDatabase, sql } from "@oneunit/database";
 
 const db = createDatabase();
 const statuses = ["active", "pending"];
@@ -250,7 +250,7 @@ The pooled client is released on `end`, `error`, `close`, or iterator completion
 ## Schema helpers
 
 ```javascript
-import { createDatabase, id, timestamp } from "@bootstrap-framework/database";
+import { createDatabase, id, timestamp } from "@oneunit/database";
 
 const db = createDatabase();
 
@@ -321,7 +321,7 @@ import {
     TimeoutError,
     isUniqueViolation,
     isTransientError,
-} from "@bootstrap-framework/database";
+} from "@oneunit/database";
 
 try {
     await db.query("INSERT INTO users (email) VALUES ($1)", [email]);
@@ -363,7 +363,7 @@ db.metrics.snapshot();
 The package ships with TypeScript declarations. ESM-only.
 
 ```ts
-import { createDatabase } from "@bootstrap-framework/database";
+import { createDatabase } from "@oneunit/database";
 
 const db = createDatabase();
 const user = await db.queryOne<{ id: string; email: string }>(

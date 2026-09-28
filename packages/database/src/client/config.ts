@@ -30,7 +30,7 @@ function parseBoolean(value: string | boolean | number | undefined, defaultValue
     return value === "true" || value === true || value === "1" || value === 1;
 }
 
-export function parseSslConfig(env: NodeJS.ProcessEnv = process.env): PoolConfig["ssl"] {
+export function parseSslConfig(env: NodeJS.ProcessEnv = process.env, logger?: { warn?: (meta: object, msg: string) => void }): PoolConfig["ssl"] {
     if (!parseBoolean(readEnv(env, "DB_SSL", "DATABASE_SSL"))) {
         return false;
     }
@@ -41,11 +41,15 @@ export function parseSslConfig(env: NodeJS.ProcessEnv = process.env): PoolConfig
         undefined,
     );
 
-    if (caPath && fs.existsSync(caPath)) {
-        return {
-            rejectUnauthorized: rejectUnauthorized ?? true,
-            ca: fs.readFileSync(caPath, "utf8"),
-        };
+    if (caPath) {
+        if (fs.existsSync(caPath)) {
+            return {
+                rejectUnauthorized: rejectUnauthorized ?? true,
+                ca: fs.readFileSync(caPath, "utf8"),
+            };
+        }
+        logger?.warn?.({ caPath }, "SSL CA file not found, falling back to unverified SSL (rejectUnauthorized forced to false)");
+        return { rejectUnauthorized: false };
     }
 
     return {
@@ -68,7 +72,7 @@ function withOptional<T>(target: Record<string, unknown>, key: string, value: T)
  * are ignored so callers can spread partial configuration safely.
  */
 export function loadDatabaseConfig(
-    overrides: Partial<PoolConfig> = {},
+    overrides: Partial<PoolConfig> & { logger?: { warn?: (meta: object, msg: string) => void } } = {},
     env: NodeJS.ProcessEnv = process.env,
 ): PoolConfig {
     const config: Record<string, unknown> = {};
@@ -136,7 +140,7 @@ export function loadDatabaseConfig(
         readEnv(env, "DB_APP_NAME", "DATABASE_APP_NAME") ??
         DEFAULT_APPLICATION_NAME;
 
-    config.ssl = overrides.ssl ?? parseSslConfig(env);
+    config.ssl = overrides.ssl ?? parseSslConfig(env, overrides.logger as { warn?: (meta: object, msg: string) => void } | undefined);
 
     for (const [key, value] of Object.entries(overrides)) {
         if (value === undefined || key in config) {

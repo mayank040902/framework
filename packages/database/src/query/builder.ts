@@ -198,7 +198,7 @@ export class QueryBuilder implements QueryBuilderType {
             operator = "=";
         }
 
-        if (value === null) {
+        if (value === undefined || value === null) {
             return this.whereNull(column as string);
         }
 
@@ -217,7 +217,7 @@ export class QueryBuilder implements QueryBuilderType {
             operator = "=";
         }
 
-        if (value === null) {
+        if (value === null || value === undefined) {
             this._wheres.push({ connector: "OR", column, operator: "IS", value: null });
             return this;
         }
@@ -311,9 +311,14 @@ export class QueryBuilder implements QueryBuilderType {
 
             if (condition.text !== undefined) {
                 text = condition.text;
-                for (const value of condition.values ?? []) {
-                    text = text.replace(/\$\d+/, () => this._params.add(value));
-                }
+                let valueIndex = 0;
+                text = text.replace(/\$(\d+)/g, (_, position) => {
+                    const idx = Number(position) - 1;
+                    if (idx < (condition.values ?? []).length) {
+                        return this._params.add(condition.values![idx]);
+                    }
+                    return `\$${position}`;
+                });
             } else {
                 const column = quoteIdent(condition.column ?? "");
                 const operator = condition.operator;
@@ -459,7 +464,14 @@ export class QueryBuilder implements QueryBuilderType {
         if (c.do === "nothing" || c.action === "nothing") {
             text += " DO NOTHING";
         } else if (c.update && Array.isArray(c.update) && c.update.length) {
-            const assignments = (c.update as string[])
+            const updateColumns = (c.update as string[]).filter((column) => c.id ? column !== c.id : true);
+            const assignments = updateColumns
+                .map((column) => `${quoteIdent(column)} = EXCLUDED.${quoteIdent(column)}`)
+                .join(", ");
+            text += ` DO UPDATE SET ${assignments}`;
+        } else if (c.columns && Array.isArray(c.columns) && c.columns.length) {
+            const updateColumns = (c.columns as string[]).filter((column) => c.id ? column !== c.id : true);
+            const assignments = updateColumns
                 .map((column) => `${quoteIdent(column)} = EXCLUDED.${quoteIdent(column)}`)
                 .join(", ");
             text += ` DO UPDATE SET ${assignments}`;

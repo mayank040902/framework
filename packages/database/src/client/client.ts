@@ -38,11 +38,19 @@ function buildQuery(text: unknown, values: unknown, options: unknown): { config:
         return { config, options: isPlainObject(values) ? (values as QueryOptions) : (options as QueryOptions ?? {}) };
     }
 
-    if (isPlainObject(values) && (options === undefined || options === null)) {
-        return { config: { text: String(text), values: (values as { values?: unknown[] }).values ?? [] }, options: values as QueryOptions };
+    if (Array.isArray(values)) {
+        return { config: { text: String(text), values: values as unknown[] }, options: (options as QueryOptions) ?? {} };
     }
 
-    const vals = (Array.isArray(values) ? values : (values ?? [])) as unknown[];
+    if (isPlainObject(values) && (options === undefined || options === null || (isPlainObject(options) && Object.keys(options).length === 0))) {
+        const valuesObj = values as { values?: unknown[] };
+        if (valuesObj.values !== undefined) {
+            return { config: { text: String(text), values: valuesObj.values ?? [] }, options: values as QueryOptions };
+        }
+        return { config: { text: String(text), values: [] }, options: values as QueryOptions };
+    }
+
+    const vals = (values ?? []) as unknown[];
     return {
         config: { text: String(text), values: vals },
         options: (options as QueryOptions) ?? {},

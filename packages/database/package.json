@@ -1,5 +1,5 @@
 {
-  "name": "@bootstrap-framework/database",
+  "name": "@oneunit/database",
   "version": "1.0.0",
   "description": "PostgreSQL client with pooling, transactions, streaming, schema tools, models, and migrations.",
   "type": "module",
@@ -37,10 +37,10 @@
       "import": "./dist/schema/index.js",
       "default": "./dist/schema/index.js"
     },
-    "./msgpack": {
-      "types": "./dist/msgpack.d.ts",
-      "import": "./dist/msgpack.js",
-      "default": "./dist/msgpack.js"
+    "./json-serialization": {
+      "types": "./dist/json-serialization.d.ts",
+      "import": "./dist/json-serialization.js",
+      "default": "./dist/json-serialization.js"
     },
     "./package.json": "./package.json"
   },
@@ -88,13 +88,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/mayank040902/framework.git",
+    "url": "git+https://github.com/mayank040902/oneunit.git",
     "directory": "packages/database"
   },
   "bugs": {
-    "url": "https://github.com/mayank040902/framework/issues"
+    "url": "https://github.com/mayank040902/oneunit/issues"
   },
-  "homepage": "https://github.com/mayank040902/framework/tree/main/packages/database#readme",
+  "homepage": "https://github.com/mayank040902/oneunit/tree/main/packages/database#readme",
   "dependencies": {
     "pg": "^8.22.0"
   },

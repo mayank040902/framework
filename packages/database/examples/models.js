@@ -1,4 +1,4 @@
-import { createDatabase, id, timestamp } from "../src/index.js";
+import { createDatabase, id, timestamp } from "@oneunit/database";
 
 const db = createDatabase({ application_name: "example-models" });
 

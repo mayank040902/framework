@@ -52,7 +52,7 @@ export function identifier(name: string): QueryFragment {
  *   sql`WHERE status IN (${sql.join(statuses)})`
  *
  * Fragments produced by this helper nest; arrays expand into comma-separated
- * placeholders.
+ * placeholders. Empty arrays produce `FALSE` for IN clauses.
  */
 export function sql(strings: TemplateStringsArray, ...values: QueryLike[]): QueryFragment {
     let text = "";
@@ -73,9 +73,15 @@ export function sql(strings: TemplateStringsArray, ...values: QueryLike[]): Quer
             params.push(...nested.values);
         } else if (Array.isArray(value)) {
             if (value.length === 0) {
-                text += "NULL";
+                text += "FALSE";
             } else {
                 const placeholders = value.map((item) => {
+                    if (Array.isArray(item)) {
+                        throw new TypeError("Nested arrays are not supported in sql template; use sql.join() for nested values");
+                    }
+                    if (item !== null && typeof item === "object" && !Buffer.isBuffer(item)) {
+                        throw new TypeError("Objects and arrays are not supported as direct sql template values; use sql.join() or raw()");
+                    }
                     params.push(item);
                     return `$${params.length}`;
                 });
@@ -113,6 +119,10 @@ sql.join = function join(values: QueryLike | QueryLike[], separator = ", "): Que
     const params: unknown[] = [];
     let text = "";
 
+    if (items.length === 0) {
+        return makeFragment("FALSE", []);
+    }
+
     items.forEach((item, index) => {
         if (index > 0) {
             text += separator;
@@ -122,6 +132,22 @@ sql.join = function join(values: QueryLike | QueryLike[], separator = ", "): Que
             const shifted = shiftFragment(item, params.length);
             text += shifted.text;
             params.push(...shifted.values);
+        } else if (Array.isArray(item)) {
+            if (item.length === 0) {
+                text += "FALSE";
+            } else {
+                const placeholders = item.map((subItem) => {
+                    if (Array.isArray(subItem)) {
+                        throw new TypeError("Nested arrays are not supported in sql.join; flatten the array first");
+                    }
+                    if (subItem !== null && typeof subItem === "object" && !Buffer.isBuffer(subItem)) {
+                        throw new TypeError("Objects are not supported as direct sql.join values; use raw() for complex expressions");
+                    }
+                    params.push(subItem);
+                    return `$${params.length}`;
+                });
+                text += placeholders.join(", ");
+            }
         } else {
             params.push(item);
             text += `$${params.length}`;

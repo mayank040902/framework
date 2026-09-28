@@ -1,4 +1,4 @@
-import { createDatabase } from "../src/index.js";
+import { createDatabase } from "@oneunit/database";
 
 const db = createDatabase({ application_name: "example-transactions" });
 

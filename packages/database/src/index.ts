@@ -16,5 +16,5 @@ export * from "./schema/index.js";
 export * from "./query/sql.js";
 export * from "./query/builder.js";
 export * from "./model/model.js";
-export * from "./msgpack.js";
+export * from "./json-serialization.js";
 export type { SslConfig, RetryOptions, InstrumentationOptions } from "./types.js";
