@@ -131,6 +131,19 @@ uWS.App()
   .get("/me", authenticate()((res, _req, request?: UwsRequestSnapshot) => {
     json(res, 200, { user: request?.user });
   }))
+  // A browser's WebSocket constructor cannot set an Authorization header, so a
+  // first-party socket client has no way to send one. `query: true` opts back
+  // into reading the token from the URL.
+  //
+  // The trade-off is real: a token in the URL reaches server access logs, proxy
+  // logs, and browser history, so this is for first-party sockets you control.
+  // If your clients are not browsers, leave it off and use a header.
+  .get(
+    "/socket",
+    authenticate({ query: true })((res, _req, request?: UwsRequestSnapshot) => {
+      json(res, 200, { connected: true, userId: request?.user?.userId });
+    }),
+  )
   .get("/stats", authenticate()(requirePermission("stats.read")((res, _req, request?: UwsRequestSnapshot) => {
     json(res, 200, { ok: true, userId: request?.user?.userId });
   })))

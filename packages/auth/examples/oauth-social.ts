@@ -50,6 +50,20 @@ const auth = createAuth({
       clientId: process.env.APPLE_CLIENT_ID,
       clientSecret: process.env.APPLE_CLIENT_SECRET,
       redirectUri: "http://localhost:3000/auth/apple/callback",
+      // Apple is the one built-in provider whose profile comes from an
+      // `id_token` in the token response rather than a server-side userinfo
+      // call, so that token is verified before any claim is read from it: the
+      // RS256 signature is checked against Apple's published JWKS, with the
+      // algorithm pinned and a `kid` required. Keys are cached for an hour and
+      // an unknown `kid` triggers one refetch, so a key rotation is invisible
+      // to you.
+      //
+      // If you already maintain a key cache, or run without outbound network
+      // access, supply the keys yourself:
+      //   apple: { clientId, clientSecret, jwks: () => myKeyCache.get("apple") }
+      //
+      // `verifyIdTokenSignature: false` exists for test harnesses only. Do not
+      // set it in production.
     },
   },
 });

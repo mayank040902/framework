@@ -9,6 +9,10 @@ const auth = createAuth({
       admin: { inherits: "user", permissions: ["stats.read"] },
     },
   },
+  // In-memory stand-in for a version column in your database. This is what lets
+  // `revokeAllSessions()` invalidate access tokens, not just refresh tokens.
+  // It costs one read per verification, which is why it is opt-in.
+  sessionStore: createExampleSessionStore(),
   oauth: {
     redirectUri: "http://localhost:3000/auth/google/callback",
     providers: {
@@ -49,6 +53,27 @@ interface ExampleApp {
 }
 
 /**
+ * Stands in for a version column in your users table. The only contract is that
+ * `getVersion` returns a number, and that it increases when sessions are
+ * invalidated. A real implementation is a SELECT on the hot path, which is
+ * exactly the cost you accept by turning this on.
+ */
+function createExampleSessionStore(): {
+  getVersion(userId: string | number): number;
+  bumpVersion(userId: string | number): number;
+} {
+  const versions = new Map<string, number>();
+  return {
+    getVersion: (userId) => versions.get(String(userId)) ?? 0,
+    bumpVersion: (userId) => {
+      const next = (versions.get(String(userId)) ?? 0) + 1;
+      versions.set(String(userId), next);
+      return next;
+    },
+  };
+}
+
+/**
  * Stands in for your database lookup. Roles come from the store, never from
  * the request body: `auth.login()` signs whatever record it is given, so
  * forwarding `req.body.roles` would let the caller choose their own grants.
@@ -81,6 +106,22 @@ export function registerAuthRoutes(app: ExampleApp): void {
   app.post("/auth/logout", async (req, res) => {
     const refreshToken = (req.body as { refreshToken?: string } | undefined)?.refreshToken;
     res.json?.({ revoked: await auth.logout(refreshToken) });
+  });
+
+  // `logout` above revokes one refresh token. Its access token keeps working
+  // until it expires, because an access token is a signed assertion with no
+  // server-side record. `revokeAllSessions` closes that gap — it invalidates
+  // every session for the user, on every device, for both token types.
+  //
+  // It returns false when no `sessionStore` is configured, so it cannot silently
+  // claim to have logged anyone out.
+  app.post("/auth/logout-all", async (req, res) => {
+    const userId = req.user?.userId;
+    if (userId === undefined) {
+      res.json?.({ error: "UNAUTHORIZED", message: "authenticate first" });
+      return;
+    }
+    res.json?.({ revoked: await auth.revokeAllSessions(userId) });
   });
 
   app.get("/auth/:provider", async (req, res) => {

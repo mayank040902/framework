@@ -658,10 +658,11 @@ Every named export from `@oneunit/auth`:
 | File | Shows |
 | :--- | :--- |
 | `examples/standalone.ts` | Login, rotation, replay rejection, wildcards, TTL validation |
-| `examples/express.ts` | Middleware, `optional` auth, refresh and logout routes, OAuth |
+| `examples/sessions.ts` | Session revocation, what `logout()` cannot reach, hashing bounds, reserved claims |
+| `examples/express.ts` | Middleware, `optional` auth, refresh and logout routes, session revocation, OAuth |
 | `examples/fastify.ts` | Plugin registration, plugin-level `optional`, preHandlers |
-| `examples/uwebsockets.ts` | Abort-safe handlers, request snapshots, provider lookup |
-| `examples/oauth-social.ts` | Provider config, PKCE, state handling |
+| `examples/uwebsockets.ts` | Abort-safe handlers, request snapshots, provider lookup, opt-in query tokens |
+| `examples/oauth-social.ts` | Provider config, PKCE, state handling, Apple `id_token` verification |
 
 They import from `@oneunit/auth`, so they run against a real install:
 

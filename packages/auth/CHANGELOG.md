@@ -4,6 +4,20 @@ All notable changes to this package are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+Add your entry here. Do not add a version heading — releases are cut by the
+maintainer from an `auth-v*` tag, and a published version number can never be
+reused.
+
+<!--
+Categories, in the order they appear below:
+- Security — a vulnerability fix. Say what was exploitable and how.
+- Added — new public API.
+- Changed — behavior a user can observe differently.
+- Fixed — a bug, with no security consequence.
+-->
+
 ## 2.0.1
 
 Security fixes and session revocation. One breaking change: tokens are no longer
