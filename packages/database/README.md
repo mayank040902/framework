@@ -1,31 +1,83 @@
-# @oneunit/database
+<p align="center">
+  <strong>@oneunit/database</strong>
+  <br/>
+  A batteries-included PostgreSQL client for Node.js
+</p>
 
-Standalone PostgreSQL client for Node.js. Connection pooling, parameterized queries, transactions, streaming, schema helpers, models, and migrations — built on [`pg`](https://node-postgres.com), [`pg-cursor`](https://github.com/brianc/node-pg-cursor), and [`pg-query-stream`](https://github.com/brianc/node-pg-query-stream).
+<p align="center">
+  <a href="https://www.npmjs.com/package/@oneunit/database"><img src="https://img.shields.io/npm/v/@oneunit/database?color=0969da&label=npm" alt="npm version"></a>
+  <a href="https://github.com/mayank040902/oneunit/blob/main/packages/database/LICENSE"><img src="https://img.shields.io/npm/l/@oneunit/database?color=22863a" alt="license"></a>
+  <img src="https://img.shields.io/badge/node-%3E%3D20-417e38" alt="node version">
+  <img src="https://img.shields.io/badge/types-included-3178c6" alt="types included">
+</p>
 
-Monorepo: https://github.com/mayank040902/oneunit
+<p align="center">
+  Connection pooling · Parameterized queries · Transactions &amp; savepoints · Streaming &amp; cursors<br/>
+  Query builder · Models · Schema helpers · Migrations · Health checks · Metrics
+</p>
 
-No sibling-package runtime dependencies. Install it in any Node.js project.
+---
+
+Built on [`pg`](https://node-postgres.com), with optional [`pg-cursor`](https://github.com/brianc/node-pg-cursor) and [`pg-query-stream`](https://github.com/brianc/node-pg-query-stream) for streaming workloads. Ships as a standalone ESM package — no sibling-package runtime dependencies.
+
+> **Monorepo** — [github.com/mayank040902/oneunit](https://github.com/mayank040902/oneunit)
+
+## Table of Contents
+
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Configuration](#configuration)
+- [Queries](#queries)
+  - [Prepared Statements](#prepared-statements)
+  - [Manual Checkout](#manual-checkout)
+  - [Timeouts & Retries](#timeouts--retries)
+- [Transactions](#transactions)
+- [SQL Fragments & Query Builder](#sql-fragments--query-builder)
+- [Models](#models)
+- [Batch Inserts](#batch-inserts)
+- [Streaming & Cursors](#streaming--cursors)
+- [Schema Helpers](#schema-helpers)
+- [Migrations](#migrations)
+- [Health Checks & Shutdown](#health-checks--shutdown)
+- [Error Handling](#error-handling)
+- [Logging & Metrics](#logging--metrics)
+- [TypeScript](#typescript)
+- [Sub-path Exports](#sub-path-exports)
+- [Examples](#examples)
+- [Testing](#testing)
+- [Contributing](#contributing)
+- [License](#license)
+
+---
+
+## Installation
 
 ```bash
 npm install @oneunit/database
 ```
 
-Requires **Node.js 20+**.
+For streaming support, add the optional peer dependencies:
+
+```bash
+npm install pg-cursor pg-query-stream
+```
 
 ---
 
-## Quick start
+## Quick Start
 
 ```javascript
 import { createDatabase } from "@oneunit/database";
 
 const db = createDatabase();
 
+// Simple query
 const { rows } = await db.query(
     "SELECT * FROM users WHERE status = $1",
     ["active"],
 );
 
+// Transaction with savepoints
 await db.transaction(async (client) => {
     await client.query(
         "INSERT INTO users (email) VALUES ($1)",
@@ -33,10 +85,11 @@ await db.transaction(async (client) => {
     );
 });
 
+// Graceful shutdown
 await db.shutdown();
 ```
 
-Connection settings are read from the environment unless you pass them explicitly:
+Connection settings are read from the environment by default, or pass them explicitly:
 
 ```javascript
 const db = createDatabase({
@@ -50,7 +103,7 @@ const db = createDatabase({
 
 ## Configuration
 
-All environment access is centralized. Explicit options always win over environment values.
+All environment access is centralized in `loadDatabaseConfig()`. Explicit options always take precedence over environment values.
 
 | Variable | Alias | Default | Description |
 | :--- | :--- | :--- | :--- |
@@ -70,7 +123,7 @@ All environment access is centralized. Explicit options always win over environm
 | `DATABASE_SSL_CA` | `DB_SSL_CA` | — | Path to CA certificate |
 | `DATABASE_APP_NAME` | `DB_APP_NAME` | `Unknown App` | `application_name` sent to Postgres |
 
-Copy [`.env.example`](.env.example) and fill in values for local development.
+> **Tip** — Copy [`.env.example`](.env.example) and fill in values for local development.
 
 ```javascript
 import { loadDatabaseConfig, createDatabase } from "@oneunit/database";
@@ -79,13 +132,13 @@ const config = loadDatabaseConfig({ max: 8 });
 const db = createDatabase(config);
 ```
 
-Credentials are never written to logs.
+Credentials are **never** written to logs.
 
 ---
 
 ## Queries
 
-Every query is parameterized. Prefer `$1, $2, ...` placeholders. Clients are acquired and released automatically.
+Every query is parameterized — use `$1, $2, ...` placeholders. Clients are acquired and released automatically.
 
 ```javascript
 const result = await db.query(
@@ -93,13 +146,14 @@ const result = await db.query(
     [userId],
 );
 
+// Returns the first row, or null
 const user = await db.queryOne(
     "SELECT * FROM users WHERE email = $1",
     ["ada@example.com"],
 );
 ```
 
-### Prepared statements
+### Prepared Statements
 
 ```javascript
 const findUser = db.prepare(
@@ -110,7 +164,7 @@ const findUser = db.prepare(
 const { rows } = await findUser.execute([userId]);
 ```
 
-### Manual checkout
+### Manual Checkout
 
 ```javascript
 const client = await db.getClient();
@@ -121,9 +175,9 @@ try {
 }
 ```
 
-### Timeouts and retries
+### Timeouts & Retries
 
-Retries are **off by default**. Enable them only for idempotent statements, and only transient PostgreSQL errors (serialization failures, deadlocks, connection loss) are retried.
+Retries are **off by default**. Enable them only for idempotent statements. Only transient PostgreSQL errors (serialization failures, deadlocks, connection loss) are retried.
 
 ```javascript
 await db.query("SELECT pg_advisory_lock($1)", [42], {
@@ -145,6 +199,7 @@ const created = await db.transaction(async (client) => {
         ["ada@example.com"],
     );
 
+    // Nested savepoint
     await db.savepoint(client, "profile", async (tx) => {
         await tx.query(
             "INSERT INTO profiles (user_id) VALUES ($1)",
@@ -156,7 +211,7 @@ const created = await db.transaction(async (client) => {
 });
 ```
 
-Options:
+**Options:**
 
 ```javascript
 await db.transaction(work, {
@@ -167,11 +222,13 @@ await db.transaction(work, {
 });
 ```
 
-Supported isolation levels: `READ UNCOMMITTED`, `READ COMMITTED`, `REPEATABLE READ`, `SERIALIZABLE`.
+Supported isolation levels: `READ UNCOMMITTED` · `READ COMMITTED` · `REPEATABLE READ` · `SERIALIZABLE`
 
 ---
 
-## SQL fragments and query builder
+## SQL Fragments & Query Builder
+
+### Tagged Template
 
 ```javascript
 import { createDatabase, sql } from "@oneunit/database";
@@ -186,7 +243,11 @@ const fragment = sql`
 `;
 
 await db.query(fragment.text, fragment.values);
+```
 
+### Fluent Query Builder
+
+```javascript
 const { rows } = await db.from("users")
     .select(["id", "email"])
     .where({ status: "active" })
@@ -194,11 +255,13 @@ const { rows } = await db.from("users")
     .limit(20);
 ```
 
-Identifiers are quoted. Values are never interpolated into SQL text.
+> Identifiers are quoted. Values are never interpolated into SQL text.
 
 ---
 
 ## Models
+
+Lightweight CRUD helpers for common table operations:
 
 ```javascript
 const users = db.model("users");
@@ -214,7 +277,7 @@ Pass `{ client }` to run inside an existing transaction.
 
 ---
 
-## Batch inserts
+## Batch Inserts
 
 ```javascript
 await db.batch.insertMany("events", rows, {
@@ -224,30 +287,37 @@ await db.batch.insertMany("events", rows, {
 });
 ```
 
-Rows are parameterized and chunked so the statement stays under PostgreSQL's parameter limit.
+Rows are parameterized and chunked so the statement stays under PostgreSQL's 65 535 parameter limit.
 
 ---
 
-## Streaming and cursors
+## Streaming & Cursors
 
 Use streams or cursors for large result sets instead of loading everything into memory.
 
 ```javascript
-const stream = await db.stream("SELECT * FROM audit_logs WHERE created_at < $1", [cutoff]);
+// Node.js readable stream
+const stream = await db.stream(
+    "SELECT * FROM audit_logs WHERE created_at < $1",
+    [cutoff],
+);
 stream.on("data", (row) => processRow(row));
 stream.on("error", console.error);
 
+// Async iterator (cursor-based)
 const cursor = await db.cursor("SELECT * FROM analytics_events");
 for await (const row of cursor) {
     processRow(row);
 }
 ```
 
-The pooled client is released on `end`, `error`, `close`, or iterator completion.
+> The pooled client is released automatically on `end`, `error`, `close`, or iterator completion.
+
+Requires optional peer dependencies: `pg-query-stream` (streams), `pg-cursor` (cursors).
 
 ---
 
-## Schema helpers
+## Schema Helpers
 
 ```javascript
 import { createDatabase, id, timestamp } from "@oneunit/database";
@@ -290,30 +360,31 @@ SQL files and ESM/CJS modules in a directory are loaded in filename order. Each 
 
 ---
 
-## Health checks and shutdown
+## Health Checks & Shutdown
 
 ```javascript
+// Detailed health info for readiness probes
 const health = await db.check();
 // { status: "up", latency: { value: 2, unit: "ms" }, pool: { total, idle, waiting } }
 
+// Simple boolean health check
 const ready = await db.health();
 if (!ready.healthy) {
     throw new Error(ready.error);
 }
 
+// Graceful shutdown (idempotent, safe to call concurrently)
 process.on("SIGTERM", async () => {
     await db.shutdown();
     process.exit(0);
 });
 ```
 
-`shutdown()` is idempotent. Concurrent callers share the same in-flight close.
-
 ---
 
-## Errors
+## Error Handling
 
-Driver errors are wrapped as `DatabaseError` while the original remains on `cause`.
+Driver errors are wrapped as `DatabaseError` with the original preserved on `.cause`.
 
 ```javascript
 import {
@@ -333,13 +404,25 @@ try {
 }
 ```
 
-Helpers: `isUniqueViolation`, `isForeignKeyViolation`, `isNotNullViolation`, `isCheckViolation`, `isSerializationFailure`, `isDeadlock`, `isConnectionError`, `isConstraintViolation`, `isTransientError`.
+**Available error helpers:**
+
+| Helper | Catches |
+| :--- | :--- |
+| `isUniqueViolation` | Duplicate key (`23505`) |
+| `isForeignKeyViolation` | FK constraint (`23503`) |
+| `isNotNullViolation` | NOT NULL constraint (`23502`) |
+| `isCheckViolation` | CHECK constraint (`23514`) |
+| `isConstraintViolation` | Any constraint violation |
+| `isSerializationFailure` | Serializable isolation conflict |
+| `isDeadlock` | Deadlock detected |
+| `isConnectionError` | Connection lost / refused |
+| `isTransientError` | Any of the above retriable errors |
 
 ---
 
-## Logging and metrics
+## Logging & Metrics
 
-Pass any logger with `info` / `warn` / `error` / `debug`. Parameter values are **not** logged unless `logParameters: true`.
+Pass any logger with `info` / `warn` / `error` / `debug` methods. Parameter values are **not** logged unless `logParameters: true`.
 
 ```javascript
 const db = createDatabase({
@@ -353,6 +436,7 @@ const db = createDatabase({
     },
 });
 
+// Snapshot current metrics
 db.metrics.snapshot();
 ```
 
@@ -360,13 +444,18 @@ db.metrics.snapshot();
 
 ## TypeScript
 
-The package ships with TypeScript declarations. ESM-only.
+The package ships with full TypeScript declarations. ESM-only (`"type": "module"`).
 
 ```ts
 import { createDatabase } from "@oneunit/database";
 
+interface User {
+    id: string;
+    email: string;
+}
+
 const db = createDatabase();
-const user = await db.queryOne<{ id: string; email: string }>(
+const user = await db.queryOne<User>(
     "SELECT id, email FROM users WHERE id = $1",
     [id],
 );
@@ -374,15 +463,32 @@ const user = await db.queryOne<{ id: string; email: string }>(
 
 ---
 
+## Sub-path Exports
+
+For tree-shaking or targeted imports, the package exposes granular entry points:
+
+```javascript
+import { createClient }       from "@oneunit/database/client";
+import { createModelFactory } from "@oneunit/database/model";
+import { createQueryBuilder }  from "@oneunit/database/query";
+import { createSchemaManager } from "@oneunit/database/schema";
+import { id, timestamp }       from "@oneunit/database/column";
+import { encode, decode }      from "@oneunit/database/json-serialization";
+```
+
+---
+
 ## Examples
 
-Runnable copies live in [`examples/`](examples):
+Runnable examples live in the [`examples/`](examples) directory:
 
-- [`examples/basic.js`](examples/basic.js) — connect, query, shut down
-- [`examples/transactions.js`](examples/transactions.js) — transaction + savepoint
-- [`examples/streaming.js`](examples/streaming.js) — cursor iteration
-- [`examples/models.js`](examples/models.js) — model CRUD
-- [`examples/migrations.js`](examples/migrations.js) — in-memory migrations
+| File | Description |
+| :--- | :--- |
+| [`basic.js`](examples/basic.js) | Connect, query, shut down |
+| [`transactions.js`](examples/transactions.js) | Transaction + savepoint |
+| [`streaming.js`](examples/streaming.js) | Cursor iteration |
+| [`models.js`](examples/models.js) | Model CRUD |
+| [`migrations.js`](examples/migrations.js) | In-memory migrations |
 
 ```bash
 DATABASE_URL=postgresql://localhost:5432/app node examples/basic.js
@@ -396,10 +502,16 @@ DATABASE_URL=postgresql://localhost:5432/app node examples/basic.js
 npm test
 ```
 
-Tests use Node's built-in test runner and do not require a live PostgreSQL instance.
+Tests use Node's built-in test runner and do **not** require a live PostgreSQL instance.
+
+---
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, coding standards, and the PR workflow.
 
 ---
 
 ## License
 
-MIT. Copyright (c) 2026 mayank.
+[MIT](LICENSE) © 2026 mayank
