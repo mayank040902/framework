@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { UserRecord, UserStore } from "@bootstrap-framework/auth";
+import type { UserRecord, UserStore } from "@oneunit/auth";
 
 interface MemoryUser extends UserRecord {
   passwordHash?: string;

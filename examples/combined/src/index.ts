@@ -1,4 +1,4 @@
-import { createAuth, fastifyAdapter } from "@bootstrap-framework/auth";
+import { createAuth, fastifyAdapter } from "@oneunit/auth";
 import { startServer } from "@bootstrap-framework/server";
 import { createKafkaBridge } from "@bootstrap-framework/realtime";
 import {

@@ -10,6 +10,7 @@ Production-ready Node.js packages for Fastify services. Each package under `pack
 | :--- | :--- |
 | `docs/getting-started.md` | Install, requirements, first server |
 | `docs/architecture.md` | Package layout, plugin graph, request lifecycle |
+| `packages/auth/ARCHITECTURE.md` | Auth token lifecycle, refresh rotation, trust boundaries |
 | `docs/security.md` | Auth, TLS, redaction, headers, secrets |
 | `docs/combining-packages.md` | How all eight packages work together |
 | `docs/environment.md` | Environment variables for every package |
@@ -22,7 +23,7 @@ Production-ready Node.js packages for Fastify services. Each package under `pack
 | `@bootstrap-framework/server` | `docs/packages/server.md` | Fastify bootstrap, plugins, health, hooks |
 | `@bootstrap-framework/logger` | `docs/packages/logger.md` | Structured Pino logging |
 | `@bootstrap-framework/errors` | `docs/packages/errors.md` | Typed errors and Fastify error handling |
-| `@bootstrap-framework/auth` | `docs/packages/auth.md` | JWT, RBAC, passwords, OAuth |
+| `@oneunit/auth` | `docs/packages/auth.md` | JWT, RBAC, passwords, OAuth |
 | `@bootstrap-framework/database` | `docs/packages/database.md` | PostgreSQL client, models, migrations |
 | `@bootstrap-framework/redis` | `docs/packages/redis.md` | ioredis client and BullMQ queues |
 | `@bootstrap-framework/kafka` | `docs/packages/kafka.md` | KafkaJS producer, consumer, admin |

@@ -38,7 +38,7 @@ Rules:
 
 ## Authentication
 
-`@bootstrap-framework/auth` issues JWT access and refresh tokens via `jsonwebtoken`.
+`@oneunit/auth` issues JWT access and refresh tokens via `jsonwebtoken`.
 
 - Default algorithm: **HS256**
 - Default access TTL: **15m**
@@ -46,13 +46,59 @@ Rules:
 - Access tokens include `typ: "access"`; refresh tokens include `typ: "refresh"`
 - Tokens are read from `Authorization: Bearer`, an `access_token` cookie, or `?access_token=`
 
+### Token type separation
+
+Access and refresh tokens are signed with the same key unless you set
+`refreshSecret`. `auth.verify()` rejects any token whose `typ` is `refresh`, so a
+long-lived refresh token cannot be replayed as a bearer credential. Do not
+re-enable this with `acceptTokenType: "refresh"` on a public route.
+
+### Refresh rotation
+
+`auth.refresh()` consumes the token it is given, so a stolen refresh token is
+usable at most once. Persist tokens through `refreshStore` and implement
+`consume()` as a single atomic operation:
+
+| Store | Atomic primitive |
+| :--- | :--- |
+| Redis | `GETDEL key` |
+| PostgreSQL | `DELETE FROM sessions WHERE id = $1 RETURNING *` |
+| MongoDB | `findOneAndDelete({ _id })` |
+
+A `get()` followed by `revoke()` is two round-trips, so two concurrent requests
+carrying the same token can both pass the validity check and each receive a new
+session. A store implementing neither `consume` nor `revoke` makes `refresh()`
+and `logout()` throw `ConfigurationError` rather than report a logout that never
+happened.
+
+### Authorization inputs
+
+`@oneunit/auth` treats roles and permissions as privileged inputs:
+
+- `auth.register()` ignores a `roles` field in its input argument. A public
+  sign-up form posts directly into that argument. Pass roles through the second,
+  server-side argument: `auth.register(input, { roles: ["member"] })`.
+- Access token permissions are derived from RBAC roles. A `permissions` array on
+  the user record is not copied into the token, so a compromised or
+  attacker-writable column cannot mint arbitrary grants. `trustUserPermissions:
+  true` opts back in — only if a separate write path guarantees the column is
+  server-controlled.
+- `auth.login()` is a low-level primitive. It signs whatever user record it is
+  given and performs no authorization. Resolve the user through
+  `loginWithPassword()` or your own store first; never forward a request body
+  into it.
+
 Production recommendations:
 
 1. Set `issuer` and `audience` and verify them
 2. Keep access tokens short-lived
-3. Persist refresh tokens in Redis or Postgres via `refreshStore` (`save`, `get`, `revoke`) so logout works
+3. Persist refresh tokens in Redis or Postgres via `refreshStore` with an atomic
+   `consume()` so logout and rotation work
 4. Do not put passwords, tokens, or PII beyond user id/roles in JWT claims
 5. Prefer header bearer tokens over query-string tokens (query strings land in access logs)
+6. Treat a TTL as seconds or a `s`/`m`/`h`/`d`/`w` timespan. Anything else throws
+   `ValidationError` rather than defaulting, so a token's real expiry can never
+   diverge from a locally computed one
 
 ### Passwords
 

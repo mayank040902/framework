@@ -15,7 +15,7 @@ Author: mayank. Repository: https://github.com/mayank040902/framework
 | `@bootstrap-framework/redis` | ioredis client and BullMQ queues |
 | `@bootstrap-framework/realtime` | WebSocket hub, Fastify plugin, and Kafka bridge |
 | `@bootstrap-framework/errors` | Typed errors and Fastify error handling |
-| `@bootstrap-framework/auth` | JWT, RBAC, passwords, and OAuth |
+| `@oneunit/auth` | JWT, RBAC, passwords, and OAuth |
 
 Install only the packages you need:
 

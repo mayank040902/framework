@@ -13,7 +13,7 @@ One Node.js process that:
 | HTTP server | `@bootstrap-framework/server` |
 | Structured logs | `@bootstrap-framework/logger` |
 | Typed HTTP errors | `@bootstrap-framework/errors` |
-| JWT + RBAC + passwords | `@bootstrap-framework/auth` |
+| JWT + RBAC + passwords | `@oneunit/auth` |
 | PostgreSQL | `@bootstrap-framework/database` |
 | Cache, sessions, jobs | `@bootstrap-framework/redis` |
 | Domain events | `@bootstrap-framework/kafka` |
@@ -28,7 +28,7 @@ npm install \
   @bootstrap-framework/server \
   @bootstrap-framework/logger \
   @bootstrap-framework/errors \
-  @bootstrap-framework/auth \
+  @oneunit/auth \
   @bootstrap-framework/database \
   @bootstrap-framework/redis \
   @bootstrap-framework/kafka \
@@ -54,7 +54,7 @@ npm install \
 
 ```javascript
 import { startServer } from "@bootstrap-framework/server";
-import { createAuth, fastifyAdapter } from "@bootstrap-framework/auth";
+import { createAuth, fastifyAdapter } from "@oneunit/auth";
 import { NotFoundError } from "@bootstrap-framework/errors";
 
 const auth = createAuth({
@@ -127,6 +127,34 @@ Use Redis as `refreshStore`:
 - Key: `refresh:${id}`
 - Value: JSON `RefreshRecord`
 - TTL: refresh token lifetime
+
+```javascript
+import { createAuth } from "@oneunit/auth";
+import { createClient } from "@bootstrap-framework/redis";
+
+const redis = createClient({ url: process.env.REDIS_URL });
+
+const auth = createAuth({
+  secret: process.env.AUTH_SECRET,
+  userStore,
+  refreshStore: {
+    save: (record) =>
+      redis.set(`refresh:${record.id}`, JSON.stringify(record), "EX", ttlSeconds),
+    get: async (id) => {
+      const raw = await redis.get(`refresh:${id}`);
+      return raw ? JSON.parse(raw) : null;
+    },
+    // GETDEL reads and deletes in one round-trip. Without an atomic
+    // operation, two concurrent refreshes with the same token both succeed.
+    consume: (id) => redis.getdel(`refresh:${id}`).then((raw) => (raw ? JSON.parse(raw) : null)),
+    revoke: (id) => redis.del(`refresh:${id}`),
+  },
+});
+```
+
+`consume` and `revoke` are what make rotation and logout work. If a store
+implements neither, `auth.refresh()` and `auth.logout()` throw
+`ConfigurationError` rather than report a logout that never happened.
 
 Use Redis as a session cache keyed by `session:${userId}` after login.
 

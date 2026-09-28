@@ -13,7 +13,7 @@ Sibling packages are optional peers. Install them when you enable the matching p
 ```bash
 npm install @bootstrap-framework/logger
 npm install @bootstrap-framework/errors
-npm install @bootstrap-framework/auth
+npm install @oneunit/auth
 npm install @bootstrap-framework/database
 npm install @bootstrap-framework/redis
 npm install @bootstrap-framework/kafka

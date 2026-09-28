@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
-import type { Auth, JwtPayload } from "@bootstrap-framework/auth";
+import type { Auth, JwtPayload } from "@oneunit/auth";
 import {
   BadRequestError,
   ConflictError,
@@ -63,11 +63,12 @@ export async function registerCombinedRoutes(server: CombinedServer, auth: Auth)
     }
 
     try {
-      return await auth.register({
-        email: body.email,
-        password: body.password,
-        roles: ["member"],
-      });
+      // Roles are server-side only. Passing them in the request body would let a
+      // caller self-assign an admin role, so they go through the options argument.
+      return await auth.register(
+        { email: body.email, password: body.password },
+        { roles: ["member"] },
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : "register failed";
       if (message.includes("unique") || message.includes("duplicate")) {

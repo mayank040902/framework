@@ -13,7 +13,7 @@
     "node": ">=20"
   },
   "dependencies": {
-    "@bootstrap-framework/auth": "workspace:*",
+    "@oneunit/auth": "workspace:*",
     "@bootstrap-framework/database": "workspace:*",
     "@bootstrap-framework/errors": "workspace:*",
     "@bootstrap-framework/kafka": "workspace:*",

@@ -14,11 +14,28 @@ Monorepo: https://github.com/mayank040902/framework
 - Social login: Google, GitHub, Instagram, Facebook, X/Twitter, Discord, Apple, LinkedIn, Microsoft, Reddit, Twitch, Slack, Spotify, TikTok
 - Works standalone or with HTTP frameworks
 
-Requires Node.js 20+.
+Requires Node.js 20+. Single runtime dependency: `jsonwebtoken`.
 
 Docs: [README](./README.md) · [ARCHITECTURE](./ARCHITECTURE.md) · [CHANGELOG](./CHANGELOG.md) · [Security](../../docs/security.md)
 
 Upgrading from 1.x? See the [2.0.0 migration notes](./CHANGELOG.md#migration).
+
+## Table of contents
+
+- [Install](#install)
+- [Quick start](#quick-start)
+- [JWT helpers](#jwt-helpers)
+- [RBAC](#rbac)
+- [Passwords](#passwords)
+- [Social login](#social-login)
+- [Framework adapters](#framework-adapters)
+- [Refresh tokens](#refresh-tokens)
+- [Utilities](#utilities)
+- [Errors](#errors)
+- [API reference](#api-reference)
+- [Examples](#examples)
+- [Scripts](#scripts)
+- [License](#license)
 
 ## Install
 
@@ -63,7 +80,7 @@ There are no built-in product roles. Pass whatever role names your app uses.
 Use these without creating an `Auth` instance:
 
 ```js
-import { encode, decode } from "@oneunit/auth";
+import { encode, decode, decodeUnsafe } from "@oneunit/auth";
 
 const token = encode(
   { userId: 123 },
@@ -72,6 +89,9 @@ const token = encode(
 );
 
 const claims = decode(token, process.env.AUTH_SECRET);
+
+// Decode without verification (inspect expired/untrusted tokens):
+const unsafeClaims = decodeUnsafe(token);
 ```
 
 `encodeAccessToken` and `encodeRefreshToken` add a `typ` claim (`access` or `refresh`).
@@ -91,6 +111,29 @@ const rbac = createRBAC({
 rbac.grant("lead", "ticket.close");
 rbac.can({ roles: ["lead"] }, "ticket.reply");
 rbac.authorize({ roles: ["support"] }, "ticket.read");
+```
+
+`defineRoles` is a typed helper for declaring role definitions outside the constructor:
+
+```js
+import { defineRoles, createRBAC } from "@oneunit/auth";
+
+const roles = defineRoles({
+  viewer: { permissions: ["doc.read"] },
+  editor: { inherits: "viewer", permissions: ["doc.write"] },
+});
+
+const rbac = createRBAC({ roles });
+```
+
+Use `matchPermission` directly to test a single granted permission against a required one:
+
+```js
+import { matchPermission } from "@oneunit/auth";
+
+matchPermission("invoice.*", "invoice.read");  // true
+matchPermission("invoice.*", "invoice.read.all"); // false
+matchPermission("invoice.**", "invoice.read.all"); // true
 ```
 
 Permission wildcards:
@@ -127,10 +170,16 @@ array on a stored user record is not copied into access tokens — see
 ## Passwords
 
 ```js
-import { hashPassword, verifyPassword } from "@oneunit/auth";
+import { hashPassword, verifyPassword, needsRehash } from "@oneunit/auth";
 
 const passwordHash = await hashPassword("correct horse battery staple");
 await verifyPassword("correct horse battery staple", passwordHash);
+
+// Check if a stored hash needs upgrading (e.g. cost parameter changed):
+if (needsRehash(passwordHash, { cost: 32768 })) {
+  const newHash = await hashPassword(password, { cost: 32768 });
+  // persist newHash
+}
 ```
 
 With a user store, `auth.register()` and `auth.loginWithPassword()` hash and verify for you.
@@ -201,6 +250,8 @@ const verifier = pkceVerifier();
 const challenge = pkceChallenge(verifier); // S256, base64url
 ```
 
+### Provider user store
+
 Optional user-store methods for linking accounts:
 
 - `findByProvider(provider, providerId)`
@@ -214,7 +265,7 @@ If no store is configured, login still works and uses a synthetic id such as
 `ProviderError` rather than collapsing every user of that provider onto the
 same subject.
 
-Custom providers:
+### Custom providers
 
 ```js
 import { createProvider, createOAuth } from "@oneunit/auth";
@@ -230,6 +281,15 @@ const acme = createProvider({
 
 const oauth = createOAuth();
 oauth.use("acme", { provider: acme, clientId: "...", clientSecret: "..." });
+```
+
+List all built-in provider definitions:
+
+```js
+import { builtinProviders, getProvider } from "@oneunit/auth";
+
+console.log(Object.keys(builtinProviders)); // ["google", "github", ...]
+const gh = getProvider("github");
 ```
 
 ## Framework adapters
@@ -297,6 +357,26 @@ uWS.App()
   });
 ```
 
+Use `snapshotUwsRequest` directly if you need the raw snapshot outside the adapter:
+
+```js
+import { snapshotUwsRequest } from "@oneunit/auth";
+
+const snapshot = snapshotUwsRequest(res, req);
+// snapshot.headers, snapshot.query, snapshot.url are safe to use after await
+```
+
+### Generic / createAdapters
+
+`createAdapters` generates all four adapter sets at once:
+
+```js
+import { createAuth, createAdapters } from "@oneunit/auth";
+
+const auth = createAuth({ secret: process.env.AUTH_SECRET });
+const { express, fastify, koa, uws } = createAdapters(auth);
+```
+
 ### Standalone HTTP
 
 ```js
@@ -304,6 +384,14 @@ const claims = await auth.verifyRequest(req);
 ```
 
 Tokens are read from `Authorization: Bearer`, an `access_token` cookie, or `?access_token=`.
+
+You can also extract the bearer token yourself:
+
+```js
+import { extractBearerToken } from "@oneunit/auth";
+
+const token = extractBearerToken(req);
+```
 
 ## Refresh tokens
 
@@ -316,6 +404,21 @@ await auth.logout(next.refreshToken);
 Refresh tokens rotate on every use: `auth.refresh()` invalidates the token it
 consumes. A refresh token is never accepted by `verify()` or `verifyRequest()`,
 so it cannot be replayed as an access credential.
+
+### In-memory refresh store
+
+For development and testing, use the built-in memory store:
+
+```js
+import { createAuth, createMemoryRefreshStore } from "@oneunit/auth";
+
+const auth = createAuth({
+  secret: process.env.AUTH_SECRET,
+  refreshStore: createMemoryRefreshStore(),
+});
+```
+
+### Custom refresh store
 
 Persist tokens with a custom `refreshStore`:
 
@@ -366,6 +469,33 @@ auth.login(user, { additionalClaims: { roles: ["admin"] } }); // throws
 
 Any other name is yours — `name`, `email`, `tier`, `tenantId`, and so on.
 
+## Utilities
+
+```js
+import {
+  isValidExpiresIn,
+  parseExpiresIn,
+  randomToken,
+  randomState,
+} from "@oneunit/auth";
+
+isValidExpiresIn("15m"); // true
+isValidExpiresIn("1y");  // false — ambiguous unit
+
+parseExpiresIn("7d"); // 604800 (seconds)
+
+const token = randomToken(); // cryptographically random hex string
+const state = randomState(); // for OAuth state parameter
+```
+
+### OAuth state store
+
+For development, `createMemoryStateStore()` keeps OAuth state in memory:
+
+```js
+import { createMemoryStateStore } from "@oneunit/auth";
+```
+
 ## Errors
 
 All errors extend `AuthError` and include `code` and `status`:
@@ -380,6 +510,97 @@ All errors extend `AuthError` and include `code` and `status`:
 | `OAuthError` | `OAUTH_ERROR` | 401 |
 | `ProviderError` | `PROVIDER_ERROR` | 502 |
 | `ValidationError` | `VALIDATION_ERROR` | 400 |
+
+## API reference
+
+Every named export from `@oneunit/auth`:
+
+### Core
+
+| Export | Kind | Description |
+| :--- | :--- | :--- |
+| `createAuth` | function | Create an `Auth` instance with JWT, RBAC, OAuth, and password support |
+| `Auth` | class | The auth instance class |
+| `auth` | function | Alias for `createAuth` |
+
+### JWT
+
+| Export | Kind | Description |
+| :--- | :--- | :--- |
+| `encode` | function | Sign a JWT payload |
+| `decode` | function | Verify and decode a JWT |
+| `decodeUnsafe` | function | Decode a JWT without verification |
+| `encodeAccessToken` | function | Sign a JWT with `typ: "access"` |
+| `encodeRefreshToken` | function | Sign a JWT with `typ: "refresh"` |
+
+### RBAC
+
+| Export | Kind | Description |
+| :--- | :--- | :--- |
+| `createRBAC` | function | Create an RBAC instance |
+| `RBAC` | class | The RBAC class |
+| `defineRoles` | function | Typed helper for role definitions |
+| `matchPermission` | function | Test a granted permission against a required one |
+
+### Passwords
+
+| Export | Kind | Description |
+| :--- | :--- | :--- |
+| `hashPassword` | function | Hash a password with scrypt |
+| `verifyPassword` | function | Verify a password against a hash |
+| `needsRehash` | function | Check if a hash needs upgrading |
+
+### OAuth
+
+| Export | Kind | Description |
+| :--- | :--- | :--- |
+| `createOAuth` | function | Create a standalone OAuth manager |
+| `OAuth` | class | The OAuth class |
+| `createProvider` | function | Define a custom OAuth provider |
+| `getProvider` | function | Look up a built-in provider by name |
+| `builtinProviders` | object | Map of all built-in provider definitions |
+| `pkceVerifier` | function | Generate a PKCE code verifier |
+| `pkceChallenge` | function | Compute S256 PKCE challenge |
+| `createMemoryStateStore` | function | In-memory OAuth state store |
+
+### Built-in providers
+
+`google`, `github`, `instagram`, `facebook`, `twitter`, `discord`, `apple`, `linkedin`, `microsoft`, `reddit`, `twitch`, `slack`, `spotify`, `tiktok` — each exported as a provider definition object.
+
+### Framework adapters
+
+| Export | Kind | Description |
+| :--- | :--- | :--- |
+| `expressAdapter` | function | Express middleware factory |
+| `fastifyAdapter` | function | Fastify plugin factory |
+| `koaAdapter` | function | Koa middleware factory |
+| `uwsAdapter` | function | uWebSockets.js adapter factory |
+| `snapshotUwsRequest` | function | Snapshot a uWS request for use after `await` |
+| `createAdapters` | function | Create all four adapters at once |
+
+### Stores
+
+| Export | Kind | Description |
+| :--- | :--- | :--- |
+| `createMemoryRefreshStore` | function | In-memory refresh token store (dev/test) |
+
+### Utilities
+
+| Export | Kind | Description |
+| :--- | :--- | :--- |
+| `parseExpiresIn` | function | Parse a TTL string to seconds |
+| `isValidExpiresIn` | function | Validate a TTL string or number |
+| `randomToken` | function | Cryptographically random hex token |
+| `randomState` | function | Random string for OAuth state |
+| `extractBearerToken` | function | Extract a bearer token from a request |
+
+### Errors
+
+`AuthError`, `InvalidTokenError`, `TokenExpiredError`, `UnauthorizedError`, `ForbiddenError`, `ConfigurationError`, `OAuthError`, `ProviderError`, `ValidationError`.
+
+### Types
+
+`AuthErrorOptions`, `JwtSignOptions`, `JwtVerifyOptions`, `JwtPayload`, `Secret`, `RoleDefinition`, `RBACOptions`, `AuthSubject`, `PasswordOptions`, `OAuthProfile`, `OAuthTokens`, `OAuthProviderConfig`, `OAuthProvider`, `ProviderDefinition`, `StateStore`, `OAuthOptions`, `OAuthAuthorizeOptions`, `UserRecord`, `UserStore`, `RefreshRecord`, `RefreshStore`, `LoginOptions`, `LoginResult`, `AuthOptions`, `RequestLike`, `ExtractTokenOptions`, `UwsHttpResponse`, `UwsHttpRequest`, `UwsRequestSnapshot`, `UwsHandler`, `ExpressRequestLike`, `ExpressResponseLike`, `ExpressNext`, `KoaContextLike`, `FastifyLike`, `FastifyRequestLike`, `FastifyReplyLike`.
 
 ## Examples
 

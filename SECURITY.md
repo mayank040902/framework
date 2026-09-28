@@ -2,7 +2,7 @@
 
 Application security guidance for this framework lives in `docs/security.md`.
 
-- JWT, passwords, RBAC, and OAuth: `@bootstrap-framework/auth`
+- JWT, passwords, RBAC, and OAuth: `@oneunit/auth`
 - HTTP headers, CORS, cookies, rate limits: `@bootstrap-framework/server`
 - Log redaction: `@bootstrap-framework/logger` production mode
 - Parameterized SQL: `@bootstrap-framework/database`

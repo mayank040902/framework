@@ -1,6 +1,6 @@
 import { startServer } from "../../dist/index.js";
-// import { createAuth, fastifyAdapter } from "@bootstrap-framework/auth";
-// npm install @bootstrap-framework/auth --save
+// import { createAuth, fastifyAdapter } from "@oneunit/auth";
+// npm install @oneunit/auth --save
 
 // const auth = createAuth({
 //   secret: process.env.AUTH_SECRET ?? "change-me-in-production",
@@ -82,6 +82,6 @@ const { address } = await startServer(8080, {
 console.log(`auth example listening at ${address}`);
 // 
 // To use auth with server package:
-// 1. npm install @bootstrap-framework/auth
+// 1. npm install @oneunit/auth
 // 2. Uncomment the auth code above
 // 3. Set AUTH_SECRET environment variable

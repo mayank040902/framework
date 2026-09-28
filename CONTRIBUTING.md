@@ -27,7 +27,7 @@ Each package has its own tests, README, CHANGELOG, and LICENSE. Do not add `work
 Run one package:
 
 ```bash
-pnpm --filter @bootstrap-framework/auth test
+pnpm --filter @oneunit/auth test
 pnpm --filter @bootstrap-framework/server build
 ```
 

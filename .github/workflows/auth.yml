@@ -1,0 +1,135 @@
+name: auth
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "packages/auth/**"
+      - ".github/workflows/auth.yml"
+  pull_request:
+    paths:
+      - "packages/auth/**"
+      - ".github/workflows/auth.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Node ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 20 is the floor declared in package.json "engines".
+        node: ["20", "22", "24"]
+
+    defaults:
+      run:
+        working-directory: packages/auth
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm run typecheck
+
+      - name: Test
+        run: pnpm test
+
+      - name: Build
+        run: pnpm run build
+
+      - name: Pack check
+        run: pnpm run pack:check
+
+      - name: Audit
+        run: pnpm audit --audit-level high
+
+  publish-dry-run:
+    name: Consumer smoke test
+    runs-on: ubuntu-latest
+    needs: verify
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build and pack
+        run: |
+          pnpm --filter @oneunit/auth run build
+          pnpm --filter @oneunit/auth pack --pack-destination "$RUNNER_TEMP"
+
+      # A published package is only correct if it works when installed, so this
+      # installs the real tarball and exercises the public API against it. It
+      # also catches examples that import from a path npm does not ship.
+      - name: Install the tarball into a clean project
+        run: |
+          mkdir -p "$RUNNER_TEMP/consumer"
+          cd "$RUNNER_TEMP/consumer"
+          npm init -y > /dev/null
+          npm pkg set type=module > /dev/null
+          npm install "$RUNNER_TEMP"/oneunit-auth-*.tgz
+
+      - name: Verify the public API
+        run: |
+          cat > "$RUNNER_TEMP/consumer/smoke.mjs" <<'EOF'
+          import assert from "node:assert/strict";
+          import {
+            createAuth,
+            matchPermission,
+            isValidExpiresIn,
+            UnauthorizedError,
+          } from "@oneunit/auth";
+
+          const auth = createAuth({
+            secret: "x".repeat(32),
+            rbac: { roles: { user: { permissions: ["a.read"] } } },
+          });
+
+          const session = await auth.login({ id: 1, roles: ["user"] });
+          assert.deepEqual(session.payload.permissions, ["a.read"]);
+          assert.equal((await auth.verify(session.accessToken)).sub, "1");
+
+          await assert.rejects(() => auth.verify(session.refreshToken), UnauthorizedError);
+
+          await auth.refresh(session.refreshToken);
+          await assert.rejects(() => auth.refresh(session.refreshToken), UnauthorizedError);
+
+          assert.equal(matchPermission("a.**", "a.b.c"), true);
+          assert.equal(isValidExpiresIn("15m"), true);
+          assert.equal(isValidExpiresIn("1y"), false);
+
+          console.log("public API OK");
+          EOF
+          cd "$RUNNER_TEMP/consumer"
+          node smoke.mjs
+
+      - name: Verify shipped examples resolve
+        working-directory: ${{ runner.temp }}/consumer
+        run: |
+          for example in standalone express fastify uwebsockets oauth-social; do
+            npx --yes tsx "node_modules/@oneunit/auth/examples/$example.ts"
+          done

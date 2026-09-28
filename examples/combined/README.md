@@ -56,6 +56,11 @@ curl -s -X POST http://127.0.0.1:8080/auth/login \
   -d '{"email":"ada@example.com","password":"correct horse battery staple"}'
 ```
 
+Registration takes only `email` and `password`. The `member` role is assigned
+server-side through `auth.register(input, { roles })`, so the request body
+cannot choose a role. Refresh tokens rotate on every use, so a
+`POST /auth/refresh` with an already-redeemed token returns 401.
+
 Use `accessToken` as `Authorization: Bearer <token>` on `/me`.
 
 ## Optional backends

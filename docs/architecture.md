@@ -23,13 +23,17 @@ docs/          Architecture, security, guides
 
 Each package has its own `package.json`, `LICENSE`, `README.md`, `CHANGELOG.md`, tests, and optional `examples/`. Published dependencies do not use the `workspace:` protocol.
 
+Per-package internals are documented alongside the code. `packages/auth/ARCHITECTURE.md` covers the auth token lifecycle, refresh-store contract, and trust boundaries.
+
 ## Design principles
 
 1. **Independent publish.** Install `@bootstrap-framework/kafka` in any Node.js app without Fastify.
 2. **Optional peers.** Server plugins dynamically `import()` sibling packages. If a package is missing, the plugin logs a warning and disables itself.
 3. **Adapters over coupling.** Kafka accepts logger, config, and codec adapters. Redis accepts any `{ error, warn, info, debug }` logger. Auth adapters cover Express, Fastify, Koa, and uWebSockets.js.
 4. **Fail closed on secrets, fail open on extras.** Auth refuses to start without `secret`. Optional plugins (database, kafka, redis, realtime) skip when the package is not installed.
-5. **Graceful shutdown.** Server, database pool, Kafka clients, Redis, and the realtime hub all close on `SIGINT` / `SIGTERM` when enabled.
+5. **Fail loudly on a missing capability.** `auth.refresh()` and `auth.logout()` throw `ConfigurationError` when the refresh store cannot invalidate a token, rather than reporting a logout that never happened.
+6. **Treat caller-supplied identity as untrusted.** Auth derives token permissions from RBAC roles and ignores `roles` and `permissions` arriving from request input.
+7. **Graceful shutdown.** Server, database pool, Kafka clients, Redis, and the realtime hub all close on `SIGINT` / `SIGTERM` when enabled.
 
 ## Package graph
 
@@ -174,7 +178,9 @@ Use standalone factories in workers, scripts, and non-Fastify apps. Use server p
 
 ## Error model
 
-`@bootstrap-framework/errors` is the HTTP/domain error layer. `@bootstrap-framework/auth` has its own `AuthError` hierarchy with `code` and `status`. Map auth errors in route handlers or let the Fastify adapter send `{ error, message }`.
+`@bootstrap-framework/errors` is the HTTP/domain error layer. `@oneunit/auth` has its own `AuthError` hierarchy with `code` and `status`. Map auth errors in route handlers or let the Fastify adapter send `{ error, message }`.
+
+Adapters report only their own failures. A Koa route's `next()` runs outside the authentication `try`, so a handler error reaches Koa's error handling instead of being rewritten as a 401.
 
 Operational errors (`statusCode < 500`) are client faults. The Fastify handler omits `stack` unless `includeStack: true`.
 
@@ -186,3 +192,5 @@ Operational errors (`statusCode < 500`) are client faults. The Fastify handler o
 4. `POST /jobs/email` enqueues a BullMQ job
 5. Kafka consumer (or worker process) handles domain events
 6. `WS /ws/events` clients receive broadcasts when events occur
+
+Registration assigns roles server-side, via `auth.register(input, { roles })`, so the request body cannot choose a role. Refresh tokens are persisted through a `refreshStore` whose `consume()` is atomic, so rotation holds under concurrent requests.
