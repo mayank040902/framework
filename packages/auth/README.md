@@ -1,6 +1,10 @@
-# @bootstrap-framework/auth
+# @oneunit/auth
 
 Framework-agnostic TypeScript authentication for Node.js. Use it from a plain script or plug it into Express, Fastify, Koa, or uWebSockets.js.
+
+[![CI](https://github.com/mayank040902/framework/actions/workflows/auth.yml/badge.svg)](https://github.com/mayank040902/framework/actions/workflows/auth.yml)
+[![npm](https://img.shields.io/npm/v/@oneunit/auth.svg)](https://www.npmjs.com/package/@oneunit/auth)
+[![license](https://img.shields.io/npm/l/@oneunit/auth.svg)](./LICENSE)
 
 Monorepo: https://github.com/mayank040902/framework
 
@@ -12,16 +16,20 @@ Monorepo: https://github.com/mayank040902/framework
 
 Requires Node.js 20+.
 
+Docs: [README](./README.md) · [ARCHITECTURE](./ARCHITECTURE.md) · [CHANGELOG](./CHANGELOG.md) · [Security](../../docs/security.md)
+
+Upgrading from 1.x? See the [2.0.0 migration notes](./CHANGELOG.md#migration).
+
 ## Install
 
 ```bash
-npm install @bootstrap-framework/auth
+npm install @oneunit/auth
 ```
 
 ## Quick start
 
 ```ts
-import { createAuth } from "@bootstrap-framework/auth";
+import { createAuth } from "@oneunit/auth";
 
 const auth = createAuth({
   secret: process.env.AUTH_SECRET,
@@ -55,7 +63,7 @@ There are no built-in product roles. Pass whatever role names your app uses.
 Use these without creating an `Auth` instance:
 
 ```js
-import { encode, decode } from "@bootstrap-framework/auth";
+import { encode, decode } from "@oneunit/auth";
 
 const token = encode(
   { userId: 123 },
@@ -71,7 +79,7 @@ const claims = decode(token, process.env.AUTH_SECRET);
 ## RBAC
 
 ```js
-import { createRBAC } from "@bootstrap-framework/auth";
+import { createRBAC } from "@oneunit/auth";
 
 const rbac = createRBAC({
   roles: {
@@ -85,7 +93,15 @@ rbac.can({ roles: ["lead"] }, "ticket.reply");
 rbac.authorize({ roles: ["support"] }, "ticket.read");
 ```
 
-Permission wildcards: `*` matches everything, `invoice.*` matches `invoice.read`.
+Permission wildcards:
+
+| Granted | Matches | Does not match |
+| :--- | :--- | :--- |
+| `*` | anything | — |
+| `invoice.*` | `invoice.read` | `invoice.read.all`, `invoices.read` |
+| `invoice.**` | `invoice.read`, `invoice.read.all` | `payment.read` |
+
+`*` stays within one dot-separated segment. `**` spans any number of segments.
 
 Direct permissions on a user still work:
 
@@ -93,10 +109,25 @@ Direct permissions on a user still work:
 rbac.can({ roles: ["member"], permissions: ["beta.access"] }, "beta.access");
 ```
 
+These are evaluated against a subject you construct in code. A `permissions`
+array on a stored user record is not copied into access tokens — see
+[Access token claims](#access-token-claims).
+
+> **`defaultRole` is a grant to anonymous callers.** A subject with no roles —
+> including `null` and `undefined` — is assigned `defaultRole`, so
+> `can(null, "post.write")` is `true` if `defaultRole` carries that permission.
+> Keep `defaultRole` unprivileged, and check for a subject before asking:
+>
+> ```js
+> if (ctx.state.user && auth.can(ctx.state.user, "post.write")) { ... }
+> ```
+>
+> The bundled adapters check for a missing user before calling `can`.
+
 ## Passwords
 
 ```js
-import { hashPassword, verifyPassword } from "@bootstrap-framework/auth";
+import { hashPassword, verifyPassword } from "@oneunit/auth";
 
 const passwordHash = await hashPassword("correct horse battery staple");
 await verifyPassword("correct horse battery staple", passwordHash);
@@ -117,6 +148,9 @@ const auth = createAuth({
 await auth.register({ email: "ada@example.com", password: "s3cret-pass" });
 await auth.loginWithPassword("ada@example.com", "s3cret-pass");
 ```
+
+`register()` ignores a `roles` field in its first argument so a public sign-up
+form cannot self-assign a role. Pass roles as the second, server-side argument.
 
 ## Social login
 
@@ -152,6 +186,21 @@ const session = await auth.loginWithOAuth("google", {
 });
 ```
 
+The callback params also accept a string: a full URL, a path with a query, a
+leading `?code=...`, or a bare `"code=...&state=..."`.
+
+### PKCE
+
+Public clients should set `pkce: true`. The package generates and stores the
+verifier for you. To manage it yourself, use the exported helpers:
+
+```js
+import { pkceVerifier, pkceChallenge } from "@oneunit/auth";
+
+const verifier = pkceVerifier();
+const challenge = pkceChallenge(verifier); // S256, base64url
+```
+
 Optional user-store methods for linking accounts:
 
 - `findByProvider(provider, providerId)`
@@ -159,12 +208,16 @@ Optional user-store methods for linking accounts:
 - `createFromProvider(provider, profile, tokens)`
 - `linkProvider(userId, provider, profile)`
 
-If no store is configured, login still works and uses a synthetic id: `google:123`.
+If no store is configured, login still works and uses a synthetic id such as
+`google:123`. That id is built from the provider profile's `id`, so
+`profileMap` must map a stable identifier — a profile without one throws
+`ProviderError` rather than collapsing every user of that provider onto the
+same subject.
 
 Custom providers:
 
 ```js
-import { createProvider, createOAuth } from "@bootstrap-framework/auth";
+import { createProvider, createOAuth } from "@oneunit/auth";
 
 const acme = createProvider({
   id: "acme",
@@ -181,12 +234,19 @@ oauth.use("acme", { provider: acme, clientId: "...", clientSecret: "..." });
 
 ## Framework adapters
 
-Adapters are optional. Express, Fastify, and Koa are optional peer dependencies. uWebSockets.js is supported via adapter but is not an npm peer (install it from its GitHub package if needed).
+The adapters never import a web framework. They read the request and response
+objects you pass them structurally, so `@oneunit/auth` has no peer dependencies
+at all and works whether or not Express, Fastify, Koa, or uWebSockets.js is
+installed. Install your framework as usual alongside this package.
+
+This also means the adapters are not tied to a framework's major version: they
+depend on a small shape (`headers`, `cookies`, `query`, a `send`-style reply)
+rather than on a class.
 
 ### Express
 
 ```js
-import { createAuth, expressAdapter } from "@bootstrap-framework/auth";
+import { createAuth, expressAdapter } from "@oneunit/auth";
 
 const auth = createAuth({ secret: process.env.AUTH_SECRET });
 const { authenticate, requirePermission, requireRole } = expressAdapter(auth);
@@ -199,7 +259,7 @@ app.get("/reports", authenticate(), requirePermission("report.read"), handler);
 ### Fastify
 
 ```js
-import { createAuth, fastifyAdapter } from "@bootstrap-framework/auth";
+import { createAuth, fastifyAdapter } from "@oneunit/auth";
 
 await fastify.register(fastifyAdapter(auth));
 fastify.get("/me", { preHandler: [fastify.authenticate()] }, async (req) => req.user);
@@ -208,7 +268,7 @@ fastify.get("/me", { preHandler: [fastify.authenticate()] }, async (req) => req.
 ### Koa
 
 ```js
-import { createAuth, koaAdapter } from "@bootstrap-framework/auth";
+import { createAuth, koaAdapter } from "@oneunit/auth";
 
 const { authenticate, requirePermission } = koaAdapter(auth);
 app.use(authenticate());
@@ -220,7 +280,7 @@ uWS request/response objects are invalid after the first `await`. The adapter sn
 
 ```js
 import uWS from "uWebSockets.js";
-import { createAuth, uwsAdapter } from "@bootstrap-framework/auth";
+import { createAuth, uwsAdapter } from "@oneunit/auth";
 
 const auth = createAuth({ secret: process.env.AUTH_SECRET });
 const { authenticate, requirePermission, json } = uwsAdapter(auth);
@@ -253,7 +313,58 @@ const next = await auth.refresh(session.refreshToken);
 await auth.logout(next.refreshToken);
 ```
 
-Pass a custom `refreshStore` with `save`, `get`, and `revoke` to persist tokens.
+Refresh tokens rotate on every use: `auth.refresh()` invalidates the token it
+consumes. A refresh token is never accepted by `verify()` or `verifyRequest()`,
+so it cannot be replayed as an access credential.
+
+Persist tokens with a custom `refreshStore`:
+
+| Method | Required | Purpose |
+| --- | --- | --- |
+| `save(record)` | yes | Store a newly issued refresh token |
+| `get(id)` | yes | Look up a record |
+| `consume(id)` | recommended | Atomically look up **and** remove a record |
+| `revoke(id)` | required unless `consume` exists | Invalidate a record on logout |
+
+Implement `consume` whenever you can. `get` followed by `revoke` is two
+round-trips, so two concurrent requests presenting the same token can both
+pass the validity check and each receive a new session. `consume` must be a
+single atomic operation (`GETDEL` in Redis, a `DELETE ... RETURNING` in SQL).
+
+`revoke` and `consume` are not optional in practice: if neither exists,
+`auth.refresh()` and `auth.logout()` throw `ConfigurationError` rather than
+report a logout that never happened. A store implementing only `consume()` is
+enough for both rotation and logout.
+
+### Access token claims
+
+Permissions in an access token are derived from RBAC roles. A `permissions`
+array on the user record is ignored unless you opt in:
+
+```js
+const auth = createAuth({ secret, trustUserPermissions: true });
+```
+
+Roles assigned during registration come from the server-side options argument,
+never the request body:
+
+```js
+await auth.register({ email, password }, { roles: ["member"] });
+```
+
+### Reserved claims
+
+`sub`, `userId`, `roles`, `permissions`, `typ`, `iss`, `aud`, `exp`, `iat`,
+`nbf`, and `jti` are derived from the authenticated user and RBAC, and cannot be
+replaced by a claim extractor or by `additionalClaims`. Doing so throws rather
+than silently minting a token for someone else:
+
+```js
+auth.registerExtractor("sub", fn);                            // throws
+auth.login(user, { additionalClaims: { roles: ["admin"] } }); // throws
+```
+
+Any other name is yours — `name`, `email`, `tier`, `tenantId`, and so on.
 
 ## Errors
 
@@ -272,7 +383,30 @@ All errors extend `AuthError` and include `code` and `status`:
 
 ## Examples
 
-See `examples/standalone.ts`, `examples/express.ts`, `examples/fastify.ts`, `examples/uwebsockets.ts`, and `examples/oauth-social.ts`.
+| File | Shows |
+| :--- | :--- |
+| `examples/standalone.ts` | Login, rotation, replay rejection, wildcards, TTL validation |
+| `examples/express.ts` | Middleware, `optional` auth, refresh and logout routes, OAuth |
+| `examples/fastify.ts` | Plugin registration, plugin-level `optional`, preHandlers |
+| `examples/uwebsockets.ts` | Abort-safe handlers, request snapshots, provider lookup |
+| `examples/oauth-social.ts` | Provider config, PKCE, state handling |
+
+They import from `@oneunit/auth`, so they run against a real install:
+
+```bash
+npm run example:standalone
+npm run example:oauth
+```
+
+From an installed copy:
+
+```bash
+npx tsx node_modules/@oneunit/auth/examples/standalone.ts
+```
+
+The OAuth example needs `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`; it exits
+with a note otherwise, because provider config is validated at `authorize()`
+time rather than at `createAuth()` time.
 
 ## Scripts
 
@@ -280,7 +414,12 @@ See `examples/standalone.ts`, `examples/express.ts`, `examples/fastify.ts`, `exa
 npm test
 npm run typecheck
 npm run build
+npm run pack:check
 ```
+
+CI runs typecheck, tests, build, `pack:check`, and `pnpm audit` on Node 20, 22,
+and 24, then installs the packed tarball into a clean project and exercises the
+public API and the shipped examples against it.
 
 ## License
 

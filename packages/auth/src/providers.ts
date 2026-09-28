@@ -239,7 +239,7 @@ export const github = createProvider({
   tokenUrl: "https://github.com/login/oauth/access_token",
   userInfoUrl: "https://api.github.com/user",
   scopes: ["read:user", "user:email"],
-  userInfoHeaders: { "user-agent": "@bootstrap-framework/auth" },
+  userInfoHeaders: { "user-agent": "@oneunit/auth" },
   async parseProfile(tokens) {
     const accessToken = tokens?.access_token;
     if (!accessToken) {
@@ -248,7 +248,7 @@ export const github = createProvider({
 
     const headers = {
       authorization: `Bearer ${accessToken}`,
-      "user-agent": "@bootstrap-framework/auth",
+      "user-agent": "@oneunit/auth",
       accept: "application/vnd.github+json",
     };
     const userRes = await requestJson("https://api.github.com/user", { headers });
@@ -356,6 +356,8 @@ export const discord = createProvider({
   },
 });
 
+const APPLE_ISSUER = "https://appleid.apple.com";
+
 export const apple = createProvider({
   id: "apple",
   name: "Apple",
@@ -363,12 +365,35 @@ export const apple = createProvider({
   tokenUrl: "https://appleid.apple.com/auth/token",
   scopes: ["name", "email"],
   extraAuthParams: { response_mode: "form_post" },
-  parseProfile(tokens) {
+  parseProfile(tokens, config) {
     const idToken = tokens?.id_token;
     if (!idToken) {
       return { provider: "apple", raw: tokens };
     }
+
+    // Apple is the only built-in provider whose profile comes from a token in
+    // the response rather than a server-side userinfo call, so the claims are
+    // checked here instead. See ARCHITECTURE.md for the signature caveat.
     const payload = JSON.parse(Buffer.from(idToken.split(".")[1], "base64url").toString("utf8")) as Record<string, unknown>;
+
+    const iss = typeof payload.iss === "string" ? payload.iss : undefined;
+    if (iss !== APPLE_ISSUER) {
+      throw new ProviderError(`Apple id_token has an unexpected issuer: ${String(iss)}`);
+    }
+
+    const aud = payload.aud;
+    const clientId = config.clientId;
+    if (clientId) {
+      const matches = Array.isArray(aud) ? aud.includes(clientId) : aud === clientId;
+      if (!matches) {
+        throw new ProviderError("Apple id_token audience does not match the configured clientId");
+      }
+    }
+
+    if (typeof payload.exp === "number" && payload.exp <= Math.floor(Date.now() / 1000)) {
+      throw new ProviderError("Apple id_token has expired");
+    }
+
     return {
       provider: "apple",
       id: payload.sub as string | undefined,
@@ -422,7 +447,7 @@ export const reddit = createProvider({
   scopes: ["identity"],
   tokenAuthMethod: "basic",
   extraAuthParams: { duration: "permanent" },
-  userInfoHeaders: { "user-agent": "@bootstrap-framework/auth" },
+  userInfoHeaders: { "user-agent": "@oneunit/auth" },
   profileMap: {
     id: "id",
     username: "name",

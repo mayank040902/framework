@@ -2,7 +2,7 @@ import jwt from "jsonwebtoken";
 import type { Algorithm, JwtHeader, SignOptions, VerifyOptions } from "jsonwebtoken";
 import { AuthError, InvalidTokenError, TokenExpiredError, ValidationError } from "./errors.js";
 import type { JwtPayload, JwtSignOptions, JwtVerifyOptions, Secret } from "./types.js";
-import { parseExpiresIn } from "./utils.js";
+import { isValidExpiresIn, parseExpiresIn } from "./utils.js";
 
 const DEFAULT_ALGORITHM: Algorithm = "HS256";
 const DEFAULT_EXPIRES_IN = 60 * 60 * 24;
@@ -31,6 +31,13 @@ function signOptions({
   const options: SignOptions = { algorithm: algorithm as Algorithm };
 
   if (expiresIn !== undefined && expiresIn !== null) {
+    // Resolve the TTL here so an unparsable value fails loudly instead of being
+    // silently defaulted by parseExpiresIn while jsonwebtoken rejects it later.
+    if (!isValidExpiresIn(expiresIn)) {
+      throw new ValidationError(
+        `Invalid expiresIn: ${JSON.stringify(expiresIn)}. Use seconds or a timespan like "15m", "7d".`,
+      );
+    }
     options.expiresIn = (typeof expiresIn === "number"
       ? parseExpiresIn(expiresIn)
       : expiresIn) as SignOptions["expiresIn"];

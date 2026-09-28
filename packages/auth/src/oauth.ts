@@ -59,7 +59,9 @@ export class OAuth {
     };
 
     this.providers.set(id, entry);
-    if (provider.id && provider.id !== id) {
+    // Also expose the provider under its own id when registered via an alias,
+    // but never overwrite an entry that was configured explicitly.
+    if (provider.id && provider.id !== id && !this.providers.has(provider.id)) {
       this.providers.set(provider.id, entry);
     }
 
@@ -176,7 +178,17 @@ export class OAuth {
 
 function normalizeCallbackParams(params: string | Record<string, string>): Record<string, string> {
   if (typeof params === "string") {
-    const url = params.includes("://") ? new URL(params) : new URL(params, "http://localhost");
+    const trimmed = params.trim();
+    // Accepts a full URL ("https://host/cb?code=..."), a path with a query
+    // ("/cb?code=..." or "cb?code=..."), a leading "?code=...", or a bare query
+    // string ("code=..."). Only the bare form needs special handling: the URL
+    // constructor reads it as a path, and reading it as a query string is the
+    // only way to find the code.
+    const isBareQuery = trimmed !== "" && !trimmed.includes("?") && !trimmed.includes("://") && !trimmed.startsWith("/");
+    if (isBareQuery) {
+      return Object.fromEntries(new URLSearchParams(trimmed));
+    }
+    const url = trimmed.includes("://") ? new URL(trimmed) : new URL(trimmed, "http://localhost");
     return Object.fromEntries(url.searchParams.entries());
   }
   return params ?? {};

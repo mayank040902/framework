@@ -1,5 +1,5 @@
-import { createAuth, uwsAdapter } from "../src/index.js";
-import type { UwsHttpRequest, UwsHttpResponse, UwsRequestSnapshot } from "../src/types.js";
+import { createAuth, uwsAdapter } from "@oneunit/auth";
+import type { UwsHttpRequest, UwsHttpResponse, UwsRequestSnapshot, UserRecord } from "@oneunit/auth";
 
 interface ExampleUwsResponse extends UwsHttpResponse {
   onAborted(cb: () => void): void;
@@ -22,9 +22,14 @@ interface ExampleUwsApp {
   listen(port: number, cb: (token: unknown) => void): unknown;
 }
 
+// uWebSockets.js is not an npm dependency of this package — the adapter is pure
+// and needs no import, only a server does. Install it from its GitHub package to
+// actually run this example.
 const uWS = {
   App(): ExampleUwsApp {
-    throw new Error("Install uWebSockets.js to run this example");
+    console.log("Install uWebSockets.js to run this example: npm i uNetworking/uWebSockets.js");
+    console.log("The uwsAdapter is pure and imports nothing; only the server does.");
+    process.exit(0);
   },
 };
 
@@ -51,6 +56,14 @@ const { authenticate, requirePermission, json } = uwsAdapter(auth);
 
 const port = Number(process.env.PORT ?? 3000);
 
+/**
+ * Stands in for your database lookup. Roles come from the store, never from
+ * the parsed request body, so a caller cannot choose their own grants.
+ */
+async function findUserByEmail(email: string): Promise<UserRecord> {
+  return { id: "user_01", email, name: "Ada", roles: ["user"] };
+}
+
 uWS.App()
   .post("/auth/login", (res, _req) => {
     const aborted = { value: false };
@@ -68,15 +81,12 @@ uWS.App()
       Promise.resolve()
         .then(async () => {
           const body = JSON.parse(buffer.toString("utf8") || "{}") as {
-            id?: string | number;
             email?: string;
-            roles?: string[];
           };
-          const session = await auth.login({
-            id: body.id as string | number,
-            email: body.email,
-            roles: body.roles ?? ["user"],
-          });
+          // Roles come from your store, never from the parsed body. `auth.login()`
+          // signs whatever record it is given and performs no authorization.
+          const user = await findUserByEmail(String(body.email ?? ""));
+          const session = await auth.login(user);
           if (!aborted.value) {
             json(res, 200, session);
           }

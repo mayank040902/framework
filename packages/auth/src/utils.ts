@@ -11,6 +11,23 @@ const UNIT_SECONDS = Object.freeze({
 
 type TimeUnit = keyof typeof UNIT_SECONDS;
 
+const EXPIRES_IN_PATTERN = /^(\d+)\s*([smhdw])$/i;
+
+/**
+ * True when `value` is a TTL this library can interpret unambiguously. Values
+ * jsonwebtoken accepts but this library cannot (`"1y"`, `"2 hours"`, `"-5m"`)
+ * are rejected so the signed token and any locally computed expiry never diverge.
+ */
+export function isValidExpiresIn(value: string | number | undefined | null): boolean {
+  if (typeof value === "number") {
+    return Number.isFinite(value);
+  }
+  if (typeof value !== "string") {
+    return false;
+  }
+  return EXPIRES_IN_PATTERN.test(value.trim());
+}
+
 export function parseExpiresIn(value: string | number | undefined | null, fallbackSeconds = 60 * 60 * 24): number {
   if (typeof value === "number" && Number.isFinite(value)) {
     return Math.max(0, Math.trunc(value));
@@ -25,7 +42,7 @@ export function parseExpiresIn(value: string | number | undefined | null, fallba
     return fallbackSeconds;
   }
 
-  const match = trimmed.match(/^(\d+)\s*([smhdw])$/i);
+  const match = trimmed.match(EXPIRES_IN_PATTERN);
   if (!match) {
     return fallbackSeconds;
   }

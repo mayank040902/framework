@@ -116,10 +116,13 @@ export function fastifyAdapter(auth: Auth) {
     fastify.decorateRequest("user", null);
 
     fastify.decorate("authenticate", (opts: ExtractTokenOptions = {}) => async (request: FastifyRequestLike, reply: FastifyReplyLike) => {
+      // Merge once so the error path sees the same options as the verify path;
+      // reading `opts.optional` alone ignored plugin-level configuration.
+      const settings: ExtractTokenOptions = { ...options, ...opts };
       try {
-        request.user = await auth.verifyRequest(request, { ...options, ...opts });
+        request.user = await auth.verifyRequest(request, settings);
       } catch (error) {
-        if (opts.optional && error instanceof UnauthorizedError) {
+        if (settings.optional && error instanceof UnauthorizedError) {
           request.user = null;
           return;
         }
@@ -158,7 +161,6 @@ export function koaAdapter(auth: Auth) {
         try {
           ctx.state.user = await auth.verifyRequest(ctx.request, options);
           ctx.state.token = auth.extractToken(ctx.request, options);
-          await next();
         } catch (error) {
           if (options.optional && error instanceof UnauthorizedError) {
             ctx.state.user = null;
@@ -168,7 +170,11 @@ export function koaAdapter(auth: Auth) {
           const err = error as AuthError;
           ctx.status = err.status ?? 401;
           ctx.body = { error: err.code ?? "AUTH_ERROR", message: err.message };
+          return;
         }
+        // `next()` stays outside the try so downstream handler errors propagate
+        // to Koa's own error handling instead of being reported as auth failures.
+        await next();
       };
     },
 

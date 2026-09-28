@@ -25,6 +25,11 @@ export interface JwtVerifyOptions {
   clockTolerance?: number;
   ignoreExpiration?: boolean;
   complete?: boolean;
+  /**
+   * Token `typ` to accept. Access tokens are rejected when set to "refresh" so a
+   * long-lived refresh token cannot be replayed as a bearer credential.
+   */
+  acceptTokenType?: "access" | "refresh";
 }
 
 export type JwtPayload = Record<string, unknown> & {
@@ -250,6 +255,12 @@ export interface RefreshRecord {
 export interface RefreshStore {
   save(record: RefreshRecord): Promise<void> | void;
   get(id: string): Promise<RefreshRecord | null | undefined> | RefreshRecord | null | undefined;
+  /**
+   * Atomically look up and remove a record. Preferred over get()+revoke(), which
+   * lets one refresh token be redeemed twice concurrently. When omitted, Auth
+   * falls back to get() followed by revoke() and requires revoke() to exist.
+   */
+  consume?(id: string): Promise<RefreshRecord | null | undefined> | RefreshRecord | null | undefined;
   revoke?(id: string): Promise<void> | void;
 }
 
@@ -293,6 +304,12 @@ export interface AuthOptions {
   accessTokenTtl?: string | number;
   refreshTokenTtl?: string | number;
   clockTolerance?: number;
+  /**
+   * Copy a `permissions` array from the user record into the access token.
+   * Off by default: permissions should come from RBAC roles, otherwise one
+   * attacker-writable database field grants arbitrary access.
+   */
+  trustUserPermissions?: boolean;
   userStore?: UserStore;
   refreshStore?: RefreshStore;
   rbac?: import("./rbac.js").RBAC | RBACOptions;
@@ -324,6 +341,7 @@ export interface ExtractTokenOptions {
   audience?: string | string[];
   issuer?: string;
   clockTolerance?: number;
+  acceptTokenType?: "access" | "refresh";
 }
 
 export interface UwsHttpResponse {

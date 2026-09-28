@@ -41,6 +41,8 @@ export {
   createProvider,
   getProvider,
   builtinProviders,
+  pkceVerifier,
+  pkceChallenge,
   google,
   github,
   instagram,
@@ -75,6 +77,7 @@ export {
 
 export {
   parseExpiresIn,
+  isValidExpiresIn,
   randomToken,
   randomState,
   extractBearerToken,

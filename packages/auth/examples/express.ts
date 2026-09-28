@@ -1,5 +1,5 @@
-import { createAuth, expressAdapter } from "../src/index.js";
-import type { ExpressRequestLike, ExpressResponseLike } from "../src/types.js";
+import { createAuth, expressAdapter } from "@oneunit/auth";
+import type { ExpressRequestLike, ExpressResponseLike, UserRecord } from "@oneunit/auth";
 
 const auth = createAuth({
   secret: process.env.AUTH_SECRET ?? "change-me-in-production",
@@ -28,13 +28,13 @@ const auth = createAuth({
 const { authenticate, requirePermission } = expressAdapter(auth);
 
 interface ExampleRequest extends ExpressRequestLike {
-  body?: { id?: string | number; email?: string; roles?: string[] };
+  body?: { id?: string | number; email?: string; password?: string };
   params?: { provider?: string };
 }
 
 interface ExampleResponse extends ExpressResponseLike {
   json?(body: unknown): unknown;
-  redirect?(url: string): unknown;
+  redirect?(url: unknown): unknown;
 }
 
 type ExampleHandler = (
@@ -48,14 +48,39 @@ interface ExampleApp {
   get(path: string, ...handlers: ExampleHandler[]): unknown;
 }
 
+/**
+ * Stands in for your database lookup. Roles come from the store, never from
+ * the request body: `auth.login()` signs whatever record it is given, so
+ * forwarding `req.body.roles` would let the caller choose their own grants.
+ */
+async function findUserByEmail(email: string): Promise<UserRecord> {
+  return { id: "user_01", email, name: "Ada", roles: ["user"] };
+}
+
 export function registerAuthRoutes(app: ExampleApp): void {
   app.post("/auth/login", async (req, res) => {
-    const session = await auth.login({
-      id: req.body?.id as string | number,
-      email: req.body?.email,
-      roles: req.body?.roles ?? ["user"],
-    });
-    res.json?.(session);
+    const user = await findUserByEmail(String(req.body?.email ?? ""));
+    if (!user) {
+      res.json?.({ error: "INVALID_CREDENTIALS", message: "Unknown user" });
+      return;
+    }
+    res.json?.(await auth.login(user));
+  });
+
+  app.post("/auth/refresh", async (req, res) => {
+    const refreshToken = (req.body as { refreshToken?: string } | undefined)?.refreshToken;
+    if (!refreshToken) {
+      res.json?.({ error: "UNAUTHORIZED", message: "refreshToken is required" });
+      return;
+    }
+    // Rotation: the presented token is consumed and cannot be reused. A second
+    // call with the same token fails with UNAUTHORIZED.
+    res.json?.(await auth.refresh(refreshToken));
+  });
+
+  app.post("/auth/logout", async (req, res) => {
+    const refreshToken = (req.body as { refreshToken?: string } | undefined)?.refreshToken;
+    res.json?.({ revoked: await auth.logout(refreshToken) });
   });
 
   app.get("/auth/:provider", async (req, res) => {
@@ -69,6 +94,11 @@ export function registerAuthRoutes(app: ExampleApp): void {
       (req.query ?? {}) as Record<string, string>,
     );
     res.json?.(session);
+  });
+
+  // `optional: true` lets anonymous callers through; request.user is null.
+  app.get("/feed", authenticate({ optional: true }), (req, res) => {
+    res.json?.({ user: req.user });
   });
 
   app.get("/me", authenticate(), (req, res) => {

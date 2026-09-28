@@ -262,9 +262,15 @@ export function matchPermission(granted: string, needed: string): boolean {
     return false;
   }
 
+  // A `**` segment spans any depth ("posts.**" matches "posts.a.b"), while a `*`
+  // segment stays within one level ("posts.*" matches "posts.create" only).
   const pattern = granted
     .split(".")
-    .map((part) => (part === "*" ? "[^.]+" : part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")))
+    .map((part) => {
+      if (part === "**") return ".*";
+      if (part === "*") return "[^.]+";
+      return part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    })
     .join("\\.");
 
   return new RegExp(`^${pattern}$`).test(needed);
