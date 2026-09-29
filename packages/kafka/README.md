@@ -2,7 +2,7 @@
 
 KafkaJS client for Node.js. The only runtime dependency is `kafkajs`. Logger, config, and codecs are adapters you pass in, so this package works standalone or inside a framework.
 
-Monorepo: https://github.com/mayank040902/framework
+Monorepo: https://github.com/mayank040902/oneunit
 
 ## Install
 
