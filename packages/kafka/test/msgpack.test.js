@@ -12,6 +12,7 @@ import {
     jsonCodec,
     parseKafkaMessage,
     parseKafkaMessageString,
+    resolveCodec,
 } from "../src/index.js";
 
 test("json codec round-trips objects", () => {
@@ -72,4 +73,12 @@ test("custom codec adapters can be injected", () => {
 
 test("unknown codec names throw", () => {
     assert.throws(() => createCodecAdapter("msgpack"), KafkaConfigError);
+});
+
+test("resolveCodec falls back to JSON only when no codec is given", () => {
+    assert.equal(resolveCodec(), jsonCodec);
+    assert.equal(resolveCodec(undefined), jsonCodec);
+    assert.equal(resolveCodec("json"), jsonCodec);
+    assert.throws(() => resolveCodec(""), KafkaConfigError);
+    assert.throws(() => resolveCodec("msgpack"), KafkaConfigError);
 });

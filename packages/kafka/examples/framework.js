@@ -1,3 +1,19 @@
+/**
+ * Framework: the low-level factories with a Pino-style logger.
+ *
+ *   npx tsx examples/framework.js
+ *
+ * Environment:
+ *   KAFKA_BROKERS   comma-separated brokers (default localhost:9092)
+ *   KAFKA_TOPIC     topic to use (default demo-events)
+ *
+ * Reach for the low-level API when you want the KafkaJS objects themselves rather
+ * than the managed client. Each factory accepts a logger, a plain options object, or
+ * both, and returns a connected client.
+ *
+ * The process stays running until you stop it with Ctrl-C.
+ */
+
 import {
     createKafka,
     createProducer,
@@ -7,18 +23,29 @@ import {
     registerShutdown,
 } from "../src/index.js";
 
+// Pino-style: bindings first, message second, and a child() method. A real Pino
+// logger omits the bindings argument when there is nothing to bind, so the library
+// can call `info(undefined, "message")` for a plain message.
+function write(level, message, bindings) {
+    if (bindings === undefined) {
+        console[level](message);
+        return;
+    }
+    console[level](message, bindings);
+}
+
 const logger = {
     error(bindings, message) {
-        console.error(message, bindings);
+        write("error", message, bindings);
     },
     warn(bindings, message) {
-        console.warn(message, bindings);
+        write("warn", message, bindings);
     },
     info(bindings, message) {
-        console.info(message, bindings);
+        write("info", message, bindings);
     },
     debug(bindings, message) {
-        console.debug(message, bindings);
+        write("debug", message, bindings);
     },
     child() {
         return this;

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createConfigAdapter, envBoolean, envNumber, envString } from "../src/index.js";
+import { createConfigAdapter, envBoolean, envNumber, envString, parseBoolean } from "../src/index.js";
 
 test("config adapter reads string, number, and boolean values", () => {
     const config = createConfigAdapter({
@@ -16,6 +16,32 @@ test("config adapter reads string, number, and boolean values", () => {
     assert.equal(config.number("KAFKA_TEST_NUMBER", 1), 42);
     assert.equal(config.number("MISSING", 3), 3);
     assert.equal(config.boolean("KAFKA_TEST_BOOL"), true);
+});
+
+test("config adapter methods survive destructuring", () => {
+    const { string, number, boolean, get } = createConfigAdapter({
+        KAFKA_TEST_NUMBER: "42",
+        KAFKA_TEST_BOOL: "yes",
+        KAFKA_TEST_RAW: "  spaced  ",
+    });
+
+    assert.equal(string("KAFKA_TEST_RAW"), "spaced");
+    assert.equal(number("KAFKA_TEST_NUMBER", 1), 42);
+    assert.equal(number("MISSING", 3), 3);
+    assert.equal(boolean("KAFKA_TEST_BOOL"), true);
+    assert.equal(boolean("MISSING", true), true);
+    assert.equal(get("KAFKA_TEST_RAW"), "  spaced  ");
+});
+
+test("parseBoolean normalises booleans and boolean-like strings", () => {
+    assert.equal(parseBoolean(true), true);
+    assert.equal(parseBoolean(false), false);
+    assert.equal(parseBoolean("TRUE"), true);
+    assert.equal(parseBoolean(" off "), false);
+    assert.equal(parseBoolean("1"), true);
+    assert.equal(parseBoolean(undefined, true), true);
+    assert.equal(parseBoolean("maybe", true), true);
+    assert.equal(parseBoolean("maybe", false), false);
 });
 
 test("env helpers read process environment", () => {

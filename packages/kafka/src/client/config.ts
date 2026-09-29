@@ -73,7 +73,9 @@ export function resolvePartitioner(options: Record<string, unknown> = {}): typeo
         return options.createPartitioner as typeof Partitioners.DefaultPartitioner;
     }
 
-    const name = String(options.partitioner ?? readConfigString(options, "KAFKA_CREATE_PARTITIONER", "default") ?? envString("KAFKA_CREATE_PARTITIONER", "default"))
+    const named = typeof options.createPartitioner === "string" ? options.createPartitioner : undefined;
+
+    const name = String(options.partitioner ?? named ?? readConfigString(options, "KAFKA_CREATE_PARTITIONER", "default") ?? envString("KAFKA_CREATE_PARTITIONER", "default"))
         .trim()
         .toLowerCase();
 
@@ -101,10 +103,34 @@ function resolveRetryConfig(retry: Record<string, unknown> = {}, options: Record
     };
 }
 
-function createLogCreator(logger: Logger) {
+function normalizeLogPayload(log: unknown): { message: unknown; extra?: Record<string, unknown> } {
+    if (log === undefined || log === null) {
+        return { message: "" };
+    }
+
+    if (typeof log === "string") {
+        return { message: log };
+    }
+
+    if (log instanceof Error) {
+        return { message: log.message, extra: { err: log } };
+    }
+
+    if (typeof log === "object") {
+        const { message, ...extra } = log as Record<string, unknown>;
+        return {
+            message: message ?? "",
+            extra: Object.keys(extra).length > 0 ? extra : undefined,
+        };
+    }
+
+    return { message: log };
+}
+
+export function createLogCreator(logger: Logger) {
     return () =>
-        ({ level, log }: { level: number; log?: Record<string, unknown> }) => {
-            const { message, ...extra } = log ?? {};
+        ({ level, log }: { level: number; log?: unknown }) => {
+            const { message, extra } = normalizeLogPayload(log);
             if (level === logLevel.ERROR) {
                 logger.error(message, extra);
                 return;

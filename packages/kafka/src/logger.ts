@@ -19,6 +19,16 @@ const OPTION_KEYS = [
     "partitioner",
     "createPartitioner",
     "rejectUnauthorized",
+    "config",
+    "codec",
+    "send",
+    "exit",
+    "parseJson",
+    "fromBeginning",
+    "logCreator",
+    "connectionTimeout",
+    "requestTimeout",
+    "authenticationTimeout",
 ] as const;
 
 export interface Logger {
@@ -133,13 +143,16 @@ function invoke(logger: Logger, level: "error" | "warn" | "info" | "debug", mess
         return;
     }
 
-    if (extra === undefined) {
-        fn.call(logger, message);
+    // Pino-style loggers take (bindings, message) and expect both positions, even
+    // when there is nothing to bind — otherwise the message lands in the bindings
+    // slot and the message slot reads as undefined.
+    if (typeof logger.child === "function") {
+        fn.call(logger, extra, message);
         return;
     }
 
-    if (typeof logger.child === "function") {
-        fn.call(logger, extra, message);
+    if (extra === undefined) {
+        fn.call(logger, message);
         return;
     }
 

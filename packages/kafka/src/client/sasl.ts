@@ -1,5 +1,15 @@
 import { envString } from "../env.js";
+import { KafkaConfigError } from "../errors.js";
 import { readConfigString } from "../adapters/config.js";
+
+// Mirrors SASLMechanism in kafkajs. Keep this in sync with the KafkaJS version.
+const SASL_MECHANISMS = new Set([
+    "plain",
+    "scram-sha-256",
+    "scram-sha-512",
+    "aws",
+    "oauthbearer",
+]);
 
 type SaslSource = Record<string, unknown> & {
     mechanism?: string;
@@ -24,8 +34,14 @@ export function getSaslConfig(options: Record<string, unknown> = {}): object | u
         return undefined;
     }
 
-    const username = source.username ?? readConfigString(options, "KAFKA_SASL_USERNAME") ?? envString("KAFKA_SASL_USERNAME");
-    const password = source.password ?? readConfigString(options, "KAFKA_SASL_PASSWORD") ?? envString("KAFKA_SASL_PASSWORD");
+    if (!SASL_MECHANISMS.has(mechanism)) {
+        throw new KafkaConfigError(
+            `Unknown SASL mechanism "${mechanism}". Supported: ${[...SASL_MECHANISMS].join(", ")}`,
+        );
+    }
+
+    const username = source.username ?? (options as SaslSource).username ?? readConfigString(options, "KAFKA_SASL_USERNAME") ?? envString("KAFKA_SASL_USERNAME");
+    const password = source.password ?? (options as SaslSource).password ?? readConfigString(options, "KAFKA_SASL_PASSWORD") ?? envString("KAFKA_SASL_PASSWORD");
 
     if (!username || !password) {
         return undefined;

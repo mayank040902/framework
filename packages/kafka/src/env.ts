@@ -18,13 +18,15 @@ export function envNumber(name: string, fallback?: number): number | undefined {
     return Number.isFinite(value) ? value : fallback;
 }
 
-export function envBoolean(name: string, fallback = false): boolean {
-    const raw = envString(name);
-    if (raw === undefined || raw === null) {
+export function parseBoolean(value: unknown, fallback = false): boolean {
+    if (typeof value === "boolean") {
+        return value;
+    }
+    if (value === undefined || value === null) {
         return fallback;
     }
 
-    const normalized = raw.toLowerCase();
+    const normalized = String(value).trim().toLowerCase();
     if (["1", "true", "yes", "on"].includes(normalized)) {
         return true;
     }
@@ -32,4 +34,8 @@ export function envBoolean(name: string, fallback = false): boolean {
         return false;
     }
     return fallback;
+}
+
+export function envBoolean(name: string, fallback = false): boolean {
+    return parseBoolean(process.env[name], fallback);
 }

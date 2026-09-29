@@ -1,7 +1,18 @@
-import {
-    createKafkaClient,
-    silentLogger,
-} from "../src/index.js";
+/**
+ * Standalone: the high-level client with no logger and no config adapter.
+ *
+ *   npx tsx examples/standalone.js
+ *
+ * Environment:
+ *   KAFKA_BROKERS   comma-separated brokers (default localhost:9092)
+ *   KAFKA_TOPIC     topic to use (default demo-events)
+ *   KAFKA_SILENT    set to "true" to silence logs
+ *
+ * Produces one message, then consumes it back. The process stays running until you
+ * stop it with Ctrl-C, at which point registerShutdown() disconnects cleanly.
+ */
+
+import { createKafkaClient, silentLogger } from "../src/index.js";
 
 const brokers = process.env.KAFKA_BROKERS ?? "localhost:9092";
 const topic = process.env.KAFKA_TOPIC ?? "demo-events";

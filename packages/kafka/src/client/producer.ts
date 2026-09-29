@@ -13,7 +13,7 @@ export async function createProducer(
     const { logger, options } = resolveLoggerAndOptions(loggerOrOptions, maybeOptions);
     const { partitioner, createPartitioner, logger: _logger, ...producerOptions } = options;
 
-    const partitionerFn = createPartitioner ?? resolvePartitioner({ partitioner, createPartitioner });
+    const partitionerFn = resolvePartitioner({ partitioner, createPartitioner });
 
     const producer = kafka.producer({
         allowAutoTopicCreation: false,

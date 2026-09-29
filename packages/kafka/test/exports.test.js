@@ -17,6 +17,7 @@ test("public API exports are present", () => {
         "isKafkaConfigured",
         "getSslConfig",
         "getSaslConfig",
+        "createLogCreator",
         "createKafkaMessage",
         "parseKafkaMessage",
         "createLoggerAdapter",

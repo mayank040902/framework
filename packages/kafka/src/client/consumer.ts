@@ -136,7 +136,7 @@ function resolveSubscribeArgs(
         const options = (typeof third === "string" ? (fourth ?? {}) : (third ?? {})) as Record<string, unknown>;
         return {
             logger: createLogger(second),
-            topic: typeof third === "string" ? third : String(options.topic),
+            topic: typeof third === "string" ? third : toOptionalString(options.topic),
             options,
         };
     }

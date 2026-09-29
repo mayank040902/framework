@@ -85,13 +85,31 @@ export function createMockKafka(overrides = {}) {
         ...overrides.admin,
     };
 
+    const calls = { producer: 0, consumer: 0, admin: 0 };
+
     return {
-        producer: () => producer,
+        calls,
+        get producerCalls() {
+            return calls.producer;
+        },
+        get consumerCalls() {
+            return calls.consumer;
+        },
+        get adminCalls() {
+            return calls.admin;
+        },
+        producer: (config) => {
+            calls.producer += 1;
+            producer.lastConfig = config;
+            return producer;
+        },
         consumer: (config) => {
+            calls.consumer += 1;
             consumer.lastConfig = config;
             return consumer;
         },
         admin: (config) => {
+            calls.admin += 1;
             admin.lastConfig = config;
             return admin;
         },

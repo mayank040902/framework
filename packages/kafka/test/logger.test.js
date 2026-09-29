@@ -11,6 +11,14 @@ test("isLogger detects logger-like objects", () => {
     assert.equal(isLogger(null), false);
 });
 
+test("isLogger rejects option objects it does not recognise as loggers", () => {
+    assert.equal(isLogger({ config: {}, info() {} }), false);
+    assert.equal(isLogger({ codec: {}, info() {} }), false);
+    assert.equal(isLogger({ parseJson: true, info() {} }), false);
+    assert.equal(isLogger({ send() {}, info() {} }), false);
+    assert.equal(isLogger({ connectionTimeout: 10, info() {} }), false);
+});
+
 test("createLoggerAdapter wraps framework loggers", () => {
     const calls = [];
     const pinoLike = {
@@ -28,6 +36,28 @@ test("createLoggerAdapter wraps framework loggers", () => {
     const logger = createLoggerAdapter(pinoLike);
     logger.info("connected", { clientId: "demo" });
     assert.deepEqual(calls[0], { extra: { clientId: "demo" }, message: "connected" });
+});
+
+test("createLoggerAdapter keeps the message in the message slot for child loggers", () => {
+    const calls = [];
+    const pinoLike = {
+        child() {
+            return this;
+        },
+        info(bindings, message) {
+            calls.push({ bindings, message });
+        },
+        error() {},
+        warn() {},
+        debug() {},
+    };
+
+    const logger = createLoggerAdapter(pinoLike);
+    logger.info("Kafka producer connected");
+
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].message, "Kafka producer connected");
+    assert.equal(calls[0].bindings, undefined);
 });
 
 test("createLoggerAdapter wraps a function logger", () => {

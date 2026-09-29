@@ -1,5 +1,5 @@
 {
-  "name": "@bootstrap-framework/kafka",
+  "name": "@oneunit/kafka",
   "version": "1.0.0",
   "description": "Production-ready Kafka client for Node.js. Works standalone or with any framework logger, with optional JSON codec.",
   "type": "module",
@@ -21,9 +21,11 @@
   },
   "files": [
     "dist",
+    "src",
     "examples",
     "LICENSE",
     "README.md",
+    "ARCHITECTURE.md",
     "CHANGELOG.md",
     ".env.example"
   ],
@@ -32,12 +34,18 @@
     "dev": "tsc -w -p tsconfig.json",
     "test": "tsx --test test/*.test.js",
     "test:watch": "tsx --test --watch test/*.test.js",
+    "smoke": "tsx scripts/smoke.mjs",
     "lint": "eslint src test examples",
     "typecheck": "tsc --noEmit --pretty false",
-    "example:standalone": "node examples/standalone.js",
-    "example:framework": "node examples/framework.js",
+    "example:standalone": "tsx examples/standalone.js",
+    "example:framework": "tsx examples/framework.js",
+    "example:producer": "tsx examples/producer.js",
+    "example:consumer": "tsx examples/consumer.js",
+    "example:codec-adapter": "tsx examples/codec-adapter.js",
     "prepack": "npm run build",
-    "prepublishOnly": "npm run build && npm test",
+    "pack:verify": "node scripts/prepublish-check.mjs",
+    "verify": "npm run typecheck && npm test && npm run pack:verify",
+    "prepublishOnly": "npm run verify",
     "pack:check": "npm pack --dry-run"
   },
   "keywords": [
@@ -48,7 +56,8 @@
     "admin",
     "nodejs",
     "microservice",
-    "bootstrap-framework"
+    "bootstrap-framework",
+    "oneunit"
   ],
   "author": "mayank",
   "license": "MIT",
@@ -62,13 +71,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/mayank040902/framework.git",
+    "url": "git+https://github.com/mayank040902/oneunit.git",
     "directory": "packages/kafka"
   },
   "bugs": {
-    "url": "https://github.com/mayank040902/framework/issues"
+    "url": "https://github.com/mayank040902/oneunit/issues"
   },
-  "homepage": "https://github.com/mayank040902/framework/tree/main/packages/kafka#readme",
+  "homepage": "https://github.com/mayank040902/oneunit/tree/master/packages/kafka#readme",
   "dependencies": {
     "kafkajs": "^2.2.4"
   },

@@ -1,5 +1,6 @@
 import fs from "node:fs";
-import { envBoolean, envString } from "../env.js";
+import { envString, parseBoolean } from "../env.js";
+import { KafkaConfigError } from "../errors.js";
 import { readConfigBoolean, readConfigString } from "../adapters/config.js";
 
 function readCert(value: string | Buffer | Buffer[] | boolean | undefined): string | Buffer | Buffer[] | undefined {
@@ -25,6 +26,9 @@ function readCert(value: string | Buffer | Buffer[] | boolean | undefined): stri
     }
 
     if (fs.existsSync(trimmed)) {
+        if (!fs.statSync(trimmed).isFile()) {
+            throw new KafkaConfigError(`TLS certificate path "${trimmed}" is not a file`);
+        }
         return fs.readFileSync(trimmed, "utf8");
     }
 
@@ -46,8 +50,14 @@ export function getSslConfig(options: Record<string, unknown> = {}): object | bo
     const enabled = options.ssl === true || readConfigBoolean(options, "KAFKA_SSL", false);
 
     let rejectUnauthorized = options.rejectUnauthorized;
-    if (rejectUnauthorized === undefined && process.env.KAFKA_SSL_REJECT_UNAUTHORIZED !== undefined) {
-        rejectUnauthorized = envBoolean("KAFKA_SSL_REJECT_UNAUTHORIZED", true);
+    if (rejectUnauthorized === undefined) {
+        // readConfigString also covers process.env when no config adapter is set.
+        rejectUnauthorized = readConfigString(options, "KAFKA_SSL_REJECT_UNAUTHORIZED");
+    }
+    if (rejectUnauthorized !== undefined) {
+        // A string "false" is truthy in Node's TLS options, so normalise it. Anything
+        // unrecognised falls back to verifying, which is the safe direction.
+        rejectUnauthorized = parseBoolean(rejectUnauthorized, true);
     }
 
     const caValue = readCert(ca as string | Buffer | Buffer[] | boolean | undefined);

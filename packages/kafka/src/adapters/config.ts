@@ -18,43 +18,49 @@ function isConfigAdapter(value: unknown): value is ConfigAdapter {
 export function createConfigAdapter(
     source: Record<string, unknown> | NodeJS.ProcessEnv = process.env,
 ): ConfigAdapter {
+    const readString = (name: string, fallback?: string): string | undefined => {
+        const raw = source[name];
+        if (raw === undefined || raw === null) {
+            return fallback;
+        }
+
+        const value = String(raw).trim();
+        return value === "" ? fallback : value;
+    };
+
+    const readNumber = (name: string, fallback?: number): number | undefined => {
+        const raw = readString(name);
+        if (raw === undefined) {
+            return fallback;
+        }
+
+        const value = Number(raw);
+        return Number.isFinite(value) ? value : fallback;
+    };
+
+    const readBoolean = (name: string, fallback = false): boolean => {
+        const raw = readString(name);
+        if (raw === undefined) {
+            return fallback;
+        }
+
+        const normalized = raw.toLowerCase();
+        if (["1", "true", "yes", "on"].includes(normalized)) {
+            return true;
+        }
+        if (["0", "false", "no", "off"].includes(normalized)) {
+            return false;
+        }
+        return fallback;
+    };
+
     return {
         get(name) {
             return source[name];
         },
-        string(name, fallback) {
-            const raw = source[name];
-            if (raw === undefined || raw === null) {
-                return fallback;
-            }
-
-            const value = String(raw).trim();
-            return value === "" ? fallback : value;
-        },
-        number(name, fallback) {
-            const raw = this.string(name);
-            if (raw === undefined) {
-                return fallback;
-            }
-
-            const value = Number(raw);
-            return Number.isFinite(value) ? value : fallback;
-        },
-        boolean(name, fallback = false) {
-            const raw = this.string(name);
-            if (raw === undefined) {
-                return fallback;
-            }
-
-            const normalized = raw.toLowerCase();
-            if (["1", "true", "yes", "on"].includes(normalized)) {
-                return true;
-            }
-            if (["0", "false", "no", "off"].includes(normalized)) {
-                return false;
-            }
-            return fallback;
-        },
+        string: readString,
+        number: readNumber,
+        boolean: readBoolean,
     };
 }
 

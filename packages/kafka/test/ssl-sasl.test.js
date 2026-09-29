@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createConfigAdapter, getSaslConfig, getSslConfig } from "../src/index.js";
+import { createConfigAdapter, getSaslConfig, getSslConfig, KafkaConfigError } from "../src/index.js";
 
 test("getSslConfig returns undefined without TLS config", () => {
     const config = createConfigAdapter({});
@@ -29,6 +29,49 @@ test("getSslConfig can enable TLS without certificates", () => {
     assert.equal(getSslConfig({ config }), true);
 });
 
+test("getSslConfig normalises a string rejectUnauthorized", () => {
+    const pem = "-----BEGIN CERTIFICATE-----\nABC\n-----END CERTIFICATE-----";
+
+    assert.equal(getSslConfig({ ca: pem, rejectUnauthorized: "false" }).rejectUnauthorized, false);
+    assert.equal(getSslConfig({ ca: pem, rejectUnauthorized: "no" }).rejectUnauthorized, false);
+    assert.equal(getSslConfig({ ca: pem, rejectUnauthorized: "true" }).rejectUnauthorized, true);
+    // Unrecognised input keeps verification on rather than silently disabling it.
+    assert.equal(getSslConfig({ ca: pem, rejectUnauthorized: "maybe" }).rejectUnauthorized, true);
+});
+
+test("getSslConfig reads rejectUnauthorized from a config adapter", () => {
+    const pem = "-----BEGIN CERTIFICATE-----\nABC\n-----END CERTIFICATE-----";
+    const config = createConfigAdapter({
+        KAFKA_CA: pem,
+        KAFKA_SSL_REJECT_UNAUTHORIZED: "false",
+    });
+    assert.equal(getSslConfig({ config }).rejectUnauthorized, false);
+});
+
+test("getSslConfig reports a certificate path that is not a file", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "kafka-ssl-dir-"));
+    assert.throws(() => getSslConfig({ ca: dir }), KafkaConfigError);
+});
+
+test("getSaslConfig rejects an unknown mechanism", () => {
+    assert.throws(
+        () => getSaslConfig({ sasl: { mechanism: "bogus", username: "user", password: "secret" } }),
+        KafkaConfigError,
+    );
+});
+
+test("getSaslConfig accepts every mechanism KafkaJS supports", () => {
+    // kafkajs SASLMechanism: plain, scram-sha-256, scram-sha-512, aws, oauthbearer.
+    // Validation must never reject one of these; the shape this package models is
+    // username/password, so the others resolve to undefined rather than throwing.
+    for (const mechanism of ["plain", "scram-sha-256", "scram-sha-512", "aws", "oauthbearer"]) {
+        assert.doesNotThrow(
+            () => getSaslConfig({ sasl: { mechanism, username: "user", password: "secret" } }),
+            `${mechanism} should not be rejected`,
+        );
+    }
+});
+
 test("getSaslConfig returns credentials from options or config adapter", () => {
     assert.equal(getSaslConfig(), undefined);
 
@@ -51,4 +94,21 @@ test("getSaslConfig returns credentials from options or config adapter", () => {
         username: "alice",
         password: "pw",
     });
+});
+
+test("getSaslConfig falls back to top-level credentials", () => {
+    const mixed = getSaslConfig({
+        sasl: { mechanism: "plain" },
+        username: "user",
+        password: "secret",
+    });
+    assert.deepEqual(mixed, {
+        mechanism: "plain",
+        username: "user",
+        password: "secret",
+    });
+});
+
+test("getSaslConfig returns undefined when no mechanism is configured", () => {
+    assert.equal(getSaslConfig({ username: "user", password: "secret" }), undefined);
 });

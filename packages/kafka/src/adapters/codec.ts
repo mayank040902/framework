@@ -92,7 +92,7 @@ export function createCodecAdapter(codec: Codec | string | { name?: string; enco
 }
 
 export function resolveCodec(codec?: Codec | string | { encode: Codec["encode"]; decode: Codec["decode"]; name?: string }): Codec {
-    if (!codec) {
+    if (codec === undefined || codec === null) {
         return jsonCodec;
     }
     return createCodecAdapter(codec);
