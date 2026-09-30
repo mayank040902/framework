@@ -1,5 +1,5 @@
 {
-  "name": "@bootstrap-framework/logger",
+  "name": "@oneunit/logger",
   "version": "1.0.0",
   "description": "High-performance structured logging with Pino, Fastify integration, and transport utilities.",
   "type": "module",
@@ -41,30 +41,44 @@
   },
   "files": [
     "dist",
-    "examples",
+    "src",
+    "examples/ts/*.ts",
     "LICENSE",
     "README.md",
+    "ARCHITECTURE.md",
     "CHANGELOG.md"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "tsc -w -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
+    "typecheck:src": "tsc -p tsconfig.json --noEmit",
+    "typecheck:examples": "tsc -p tsconfig.examples.json",
+    "example": "tsx examples/ts/logger-example.ts",
+    "example:http": "tsx examples/ts/http-example.ts",
+    "example:fastify": "tsx examples/ts/fastify-example.ts",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:security": "vitest run test/security.test.ts",
+    "test:integration": "vitest run test/integration.test.ts",
+    "test:serializers": "vitest run test/serializers.test.ts",
+    "test:api": "vitest run test/api.test.ts",
+    "test:perf": "vitest run test/performance.test.ts",
     "prepack": "npm run build",
-    "prepublishOnly": "npm run build && npm test",
-    "pack:check": "npm pack --dry-run"
+    "prepublishOnly": "npm run build && npm run typecheck && npm run typecheck:examples && npm test",
+    "pack:check": "npm pack --dry-run",
+    "verify": "npm run build && npm run typecheck && npm run typecheck:examples && npm test && npm run pack:check"
   },
   "keywords": [
-    "bootstrap",
-    "framework",
+    "oneunit",
     "node",
     "typescript",
     "logger",
+    "logging",
     "pino",
     "structured-logging",
-    "fastify"
+    "fastify",
+    "redaction"
   ],
   "author": "mayank",
   "license": "MIT",
@@ -78,13 +92,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/mayank040902/framework.git",
+    "url": "git+https://github.com/mayank040902/oneunit.git",
     "directory": "packages/logger"
   },
   "bugs": {
-    "url": "https://github.com/mayank040902/framework/issues"
+    "url": "https://github.com/mayank040902/oneunit/issues"
   },
-  "homepage": "https://github.com/mayank040902/framework/tree/main/packages/logger#readme",
+  "homepage": "https://github.com/mayank040902/oneunit/tree/master/packages/logger#readme",
   "dependencies": {
     "pino": "^10.3.1",
     "pino-http": "^11.0.0",

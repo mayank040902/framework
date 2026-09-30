@@ -16,7 +16,7 @@
         "isolatedModules": true,
         "baseUrl": ".",
         "paths": {
-            "@bootstrap-framework/logger": ["../../dist/index.d.ts"]
+            "@oneunit/logger": ["../../dist/index.d.ts"]
         }
     },
     "include": ["*.ts"]
