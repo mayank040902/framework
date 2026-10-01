@@ -1,91 +1,703 @@
-# @bootstrap-framework/redis
+# @oneunit/redis
 
-Redis client and BullMQ job queues. Works standalone or with any logger that has `error`, `warn`, `info`, and `debug`.
+Production-ready Redis client wrapper and BullMQ job queue integration for Node.js. Works standalone or with any logger that implements `error`, `warn`, `info`, and `debug`.
 
-Monorepo: https://github.com/mayank040902/framework
+Part of the [oneunit](https://github.com/mayank040902/oneunit) monorepo.
 
-## Install
+## Highlights
+
+- **Shared Connection Architecture** — Default `maxRetriesPerRequest: null` allows a single `ioredis` client to be shared cleanly between standard Redis operations and BullMQ `Queue` / `Worker` instances.
+- **Safe Redis URL Handling** — Passes URL positionally to `ioredis` or falls back to `process.env.REDIS_URL`. Prevents the silent fallback to `localhost:6379` caused by passing `{ url }` in an options object.
+- **Credential Redaction** — `redactError` automatically strips sensitive plaintext passwords from `AUTH` and `HELLO` command failures across client events, `QueueEvents`, and `shutdown`.
+- **Bounded Health Checks** — `health(client, { timeout: 1000 })` returns latency and status, preventing health probes from hanging indefinitely on disconnected sockets.
+- **Robust Graceful Shutdown** — `shutdown(client)` issues an idempotent `QUIT` bounded by a 5-second deadline, falls back to forced `disconnect()` if unresponsive, and prevents crashes from duplicate `SIGINT` / `SIGTERM` signals.
+- **Production BullMQ Presets** — `createQueue` defaults to exponential backoff (1s initial delay), 3 retry attempts, and automatic retention pruning (100 completed, 1,000 failed jobs).
+- **Safe Pipeline Batching** — `runPipeline` sends many commands in one round trip and reports per-command failures explicitly, because a failed command inside a raw `client.pipeline()` resolves the batch and is otherwise invisible. Each step must queue exactly one command, enforced at runtime; errors are redacted and the batch is bounded by a timeout.
+- **Prefix Inheritance** — `attachQueueEvents` automatically inherits the queue's custom prefix, preventing lost event subscriptions.
+- **Universal Logger Adapter** — Duck-typed logger support for Console, Pino, Winston, etc. Automatically normalizes missing log levels and inverts argument ordering for Pino (`(bindings, message)` vs `(message, extra)`).
+- **Subpath Exports** — Modular imports via `@oneunit/redis`, `@oneunit/redis/client`, `@oneunit/redis/queue`, and `@oneunit/redis/pipeline`.
+- **Strict TypeScript Types** — Fully typed ESM package targeting Node.js 20+ with re-exported BullMQ and ioredis types.
+
+---
+
+## Installation
 
 ```bash
-npm install @bootstrap-framework/redis
+npm install @oneunit/redis
 ```
 
-Requires **Node.js 20+**.
+Requires **Node.js 20+**. Ships as pure ESM.
 
-## Quick start
+> [!NOTE]
+> `ioredis` and `bullmq` are direct dependencies. You do not need to install them separately.
 
-```javascript
-import { createClient, createQueue, createWorker, shutdown } from "@bootstrap-framework/redis";
+---
 
+## Quick Start
+
+```typescript
+import {
+  createClient,
+  createQueue,
+  createWorker,
+  attachQueueEvents,
+  health,
+  shutdown,
+} from "@oneunit/redis";
+
+// 1. Initialize Redis client (reads REDIS_URL from env by default)
 const redis = createClient({ url: process.env.REDIS_URL });
 
-await redis.set("session:123", JSON.stringify({ userId: 42 }), "EX", 3600);
-const session = await redis.get("session:123");
+// 2. Perform regular Redis operations
+await redis.set(
+  "user:session:123",
+  JSON.stringify({ id: 123, role: "admin" }),
+  "EX",
+  3600,
+);
+const session = await redis.get("user:session:123");
 
+// 3. Create a BullMQ Queue using the shared Redis client
 const emailQueue = createQueue({
-    name: "email",
-    connection: redis,
+  name: "email",
+  connection: redis,
 });
 
+// 4. Attach event listeners for job observability
+const queueEvents = attachQueueEvents({ queue: emailQueue });
+
+// 5. Create a Worker to process background jobs
+const worker = createWorker({
+  name: "email",
+  connection: redis,
+  concurrency: 5,
+  processor: async (job) => {
+    console.log(`Processing email job ${job.id}:`, job.data);
+    await job.updateProgress(100);
+    return { delivered: true };
+  },
+});
+
+// 6. Enqueue a job (inherits 3 attempts + exponential backoff)
 await emailQueue.add("welcome", {
-    to: "user@example.com",
-    template: "welcome",
+  to: "developer@example.com",
+  template: "welcome",
 });
 
-createWorker({
-    name: "email",
-    connection: redis,
-    processor: async (job) => {
-        console.log(`Sending ${job.data.template} email`);
+// 7. Check connectivity
+const status = await health(redis);
+console.log(`Redis status: ${status.status} (${status.latency.value}ms)`);
+
+// 8. Graceful teardown
+async function closeApp() {
+  await queueEvents.close();
+  await worker.close();
+  await emailQueue.close();
+  await shutdown(redis);
+}
+
+process.on("SIGTERM", closeApp);
+process.on("SIGINT", closeApp);
+```
+
+---
+
+## Subpath Imports
+
+Import only what you need to optimize module loading and boundaries:
+
+```typescript
+// Everything (client, queue, worker, logger)
+import { createClient, createQueue, createWorker } from "@oneunit/redis";
+
+// Redis client only (zero BullMQ imports)
+import {
+  createClient,
+  health,
+  shutdown,
+  attachEvents,
+} from "@oneunit/redis/client";
+
+// Queues & workers only
+import {
+  createQueue,
+  createWorker,
+  attachQueueEvents,
+} from "@oneunit/redis/queue";
+
+// Command batching only
+import { runPipeline, pipelineValues } from "@oneunit/redis/pipeline";
+```
+
+---
+
+## Core API Reference
+
+### Client API (`@oneunit/redis/client` or `@oneunit/redis`)
+
+#### `createClient(options?, logger?)`
+
+Creates and returns a standard `ioredis` `Redis` instance configured with safe defaults and event logging.
+
+```typescript
+function createClient(
+  options?: RedisClientOptions | string,
+  logger?: Logger,
+): Redis;
+```
+
+You can pass either a connection URL string or an options object:
+
+```typescript
+// From environment variable REDIS_URL
+const client1 = createClient();
+
+// From explicit URL string
+const client2 = createClient("redis://127.0.0.1:6379");
+
+// From options object
+const client3 = createClient({
+  url: "redis://127.0.0.1:6379",
+  tls: { rejectUnauthorized: false },
+});
+```
+
+**Default Settings:**
+
+| Option                 | Default                 | Rationale                                                                                                                                                           |
+| :--------------------- | :---------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `url`                  | `process.env.REDIS_URL` | ioredis constructor only parses URL from positional arguments; passing `{ url }` in options is silently ignored. `createClient` ensures URL is passed positionally. |
+| `lazyConnect`          | `true`                  | Opens no socket on instantiation. First command initiates connection, keeping module imports free of network side effects.                                          |
+| `maxRetriesPerRequest` | `null`                  | Required by BullMQ. BullMQ throws if this is not `null`. Defaulting to `null` allows the client to be shared with queues and workers.                               |
+
+#### `health(client, options?)`
+
+Performs an active `PING` bounded by a strict timeout to assess connectivity and measure round-trip latency.
+
+```typescript
+interface HealthOptions {
+  timeout?: number; // Milliseconds to wait before reporting down (default: 1000)
+}
+
+interface HealthResult {
+  status: "up" | "down";
+  latency: {
+    value: number;
+    unit: "ms";
+  };
+  error?: string;
+}
+
+async function health(
+  client: Redis,
+  options?: HealthOptions,
+): Promise<HealthResult>;
+```
+
+```typescript
+const result = await health(redis, { timeout: 1500 });
+if (result.status === "down") {
+  console.error("Redis unreachable:", result.error);
+}
+```
+
+> [!TIP]
+> Why the timeout matters: When disconnected, `ioredis` queues commands indefinitely in its offline queue while reconnecting. Without a bounded timeout, an unbounded `PING` would hang forever instead of returning `"down"`.
+
+#### `shutdown(client, logger?)`
+
+Gracefully terminates a Redis connection with timeout protection and idempotency.
+
+```typescript
+async function shutdown(
+  client: Redis | null | undefined,
+  logger?: Logger,
+): Promise<void>;
+```
+
+- Sends `QUIT` command to allow pending commands to finish.
+- If the server does not acknowledge `QUIT` within **5,000ms**, forces the socket closed via `client.disconnect()`.
+- Safe to call multiple times or bind across both `SIGINT` and `SIGTERM` without throwing `Connection is closed` errors.
+- Automatically redacts credentials if a shutdown error is logged.
+
+#### `attachEvents(client, logger?)`
+
+Attaches listeners to the five core `ioredis` connection lifecycle events (`connect`, `ready`, `reconnecting`, `error`, `close`).
+
+```typescript
+function attachEvents(client: Redis, logger?: Logger): void;
+```
+
+- `createClient` calls this automatically.
+- Guarded by an internal symbol (`Symbol.for("oneunit.redis.eventsAttached")`) so duplicate calls will not attach duplicate listeners or trigger `MaxListenersExceededWarning`.
+- The `error` event listener is always registered, preventing unhandled `error` events from crashing the process even if no logger is provided.
+
+#### `redactError(error)`
+
+Sanitizes `ioredis` errors that include command payloads, replacing sensitive credentials with `"[redacted]"`.
+
+```typescript
+function redactError(error: unknown): unknown;
+```
+
+```typescript
+try {
+  await client.auth("default", "secret_pass");
+} catch (err) {
+  // Command arguments with plaintext password are safe to log
+  logger.error("Authentication failed", redactError(err));
+}
+```
+
+---
+
+### Queue API (`@oneunit/redis/queue` or `@oneunit/redis`)
+
+#### `createQueue(config)`
+
+Creates and returns a BullMQ `Queue` pre-configured with production-ready retry and retention defaults.
+
+```typescript
+interface QueueConfig {
+  name: string;
+  connection: Redis;
+  prefix?: string; // Default: "queue"
+  defaultJobOptions?: JobsOptions; // Overrides merged key-by-key
+  settings?: QueueOptions["settings"];
+}
+
+function createQueue(config: QueueConfig): Queue;
+```
+
+**Default Job Options:**
+
+| Setting            | Value                                  | Behavior                                                              |
+| :----------------- | :------------------------------------- | :-------------------------------------------------------------------- |
+| `attempts`         | `3`                                    | Retries failed jobs up to 3 times before moving them to failed state. |
+| `backoff`          | `{ type: "exponential", delay: 1000 }` | Exponential delay (1s, 2s, 4s...) between retries.                    |
+| `removeOnComplete` | `100`                                  | Keeps the last 100 completed jobs in Redis for inspection.            |
+| `removeOnFail`     | `1000`                                 | Keeps the last 1,000 failed jobs for debugging.                       |
+
+> [!NOTE]
+> Options are merged key-by-key. Passing `{ attempts: 5 }` keeps the default exponential backoff and retention settings intact. Explicit `null` values (such as `removeOnComplete: null`) pass through to indicate "keep forever".
+
+#### `createWorker(config)`
+
+Creates and returns a BullMQ `Worker` instance to process jobs from a queue.
+
+```typescript
+interface WorkerConfig<T = unknown> {
+  name: string;
+  processor: Processor<T>;
+  connection: Redis;
+  prefix?: string; // Default: "queue"
+  concurrency?: number; // Default: 1 (BullMQ default)
+  limiter?: WorkerOptions["limiter"];
+  settings?: WorkerOptions["settings"];
+}
+
+function createWorker<T = unknown>(config: WorkerConfig<T>): Worker<T>;
+```
+
+```typescript
+interface EmailPayload {
+  to: string;
+  body: string;
+}
+
+const worker = createWorker<EmailPayload>({
+  name: "email",
+  connection: redis,
+  concurrency: 10,
+  processor: async (job) => {
+    await sendMail(job.data.to, job.data.body);
+  },
+});
+```
+
+#### `attachQueueEvents(config)`
+
+Attaches a managed BullMQ `QueueEvents` listener to report job lifecycle transitions to a logger.
+
+```typescript
+interface QueueEventsConfig {
+  queue: Queue;
+  logger?: Logger;
+  prefix?: string; // Inherits queue prefix if omitted
+  connection?: QueueEventsOptions["connection"]; // Defaults to queue connection
+}
+
+function attachQueueEvents(config: QueueEventsConfig): QueueEvents;
+```
+
+- **Prefix Inheritance** — Automatically reads the prefix from `queue.opts.prefix`. Prevents issues where custom prefixes caused events to be silently dropped.
+- **Lifecycle Logging** — Automatically logs `completed`, `failed` (with reason), `progress`, and `error` (with credential redaction).
+- **Resilient Teardown** — Wraps BullMQ's `QueueEvents.close()` so it cannot throw when the background connection already failed during initialization, and so the duplicated connection is released. That duplicate is one the caller has no reference to, so a failure there would otherwise leave the process unable to exit. Errors unrelated to the connection being gone are still rethrown.
+
+#### BullMQ Re-exports
+
+For convenience and typing consistency, common BullMQ classes and types are re-exported:
+
+- **Classes**: `Queue`, `Worker`, `QueueEvents`
+- **Types**: `QueueOptions`, `JobsOptions`, `WorkerOptions`, `Job`, `Processor`, `QueueEventsOptions`
+
+---
+
+### Logger API (`@oneunit/redis`)
+
+`@oneunit/redis` does not require any specific logging library. It accepts any object that implements the `Logger` interface:
+
+```typescript
+interface Logger {
+  error(message: unknown, extra?: unknown): void;
+  warn(message: unknown, extra?: unknown): void;
+  info(message: unknown, extra?: unknown): void;
+  debug(message: unknown, extra?: unknown): void;
+  child?(bindings?: Record<string, unknown>): Logger;
+}
+```
+
+#### Adapters and Helpers
+
+- `consoleLogger` — Built-in logger that routes to `console.error`, `console.warn`, `console.info`, and `console.debug`.
+- `silentLogger` — Built-in no-op logger that suppresses all log output.
+- `createLogger(input?)` — Completes a partial logger by routing missing levels to `info` or no-op, preventing `logger.info is not a function` runtime crashes.
+- `isLogger(value)` — Type guard that verifies if an unknown object implements logger functions.
+
+#### Automatic Pino Detection
+
+Pino signatures use `(bindings, message)`, whereas standard loggers use `(message, extra)`.
+
+`@oneunit/redis` detects Pino instances by checking for `bindings()` and `levels` properties, and automatically swaps argument positions so that metadata is merged into the structured JSON record rather than becoming the message string.
+
+```typescript
+import pino from "pino";
+import { createClient } from "@oneunit/redis";
+
+const logger = pino();
+const client = createClient({}, logger); // Pino format handled automatically
+```
+
+### Pipeline API (`@oneunit/redis/pipeline` or `@oneunit/redis`)
+
+#### `runPipeline(client, steps, options?)`
+
+Runs a batch of commands in a single round trip. Use it when you already have
+several independent commands in hand; a pipeline cannot help when each command
+depends on the previous one's result.
+
+```typescript
+const result = await runPipeline(client, [
+  { label: "set:a", run: (p) => void p.set("a", "1") },
+  { label: "set:b", run: (p) => void p.set("b", "2") },
+  { label: "get:a", run: (p) => void p.get("a") },
+]);
+
+result.failed; // how many commands failed
+result.durationMs; // wall-clock duration of EXEC
+pipelineValues(result.results); // ["OK", "OK", "1"] — throws if any failed
+```
+
+**Each step must queue exactly one command.** Results are matched to steps by
+position, so a step that queues two commands would shift every later value onto
+the wrong label, and an `async` step queues nothing before `EXEC` is sent and
+loses its command silently. Neither is a compile error, so `runPipeline` checks
+ioredis's own queue length around every step and raises `PipelineStepError`
+naming the offending label:
+
+```typescript
+// Throws: Redis pipeline step "seed" queued 2 commands, expected exactly 1
+await runPipeline(client, [
+  {
+    label: "seed",
+    run: (p) => {
+      p.set("a", "1");
+      p.set("b", "2");
     },
+  },
+]);
+
+// Also throws — and the commands after it are never sent
+await runPipeline(client, [
+  {
+    label: "get",
+    run: async (p) => {
+      await something();
+      void p.get("a");
+    },
+  },
+]);
+```
+
+Write two steps instead of one step with two commands, and do not make a step
+`async` — awaiting inside `run` queues the command too late.
+
+| Option         | Default | Purpose                                                                                                         |
+| :------------- | :------ | :-------------------------------------------------------------------------------------------------------------- |
+| `timeout`      | `5000`  | Milliseconds to wait for `EXEC` before raising `PipelineTimeoutError`. Invalid values fall back to the default. |
+| `logger`       | none    | Logger for batch-level warnings and the debug summary.                                                          |
+| `throwOnError` | `false` | Raise `PipelineCommandError` if any command failed.                                                             |
+
+#### Why this wraps `client.pipeline()`
+
+A failed command does **not** fail a pipeline. ioredis resolves `EXEC` and
+reports the failure per command:
+
+```typescript
+const raw = await client.pipeline().incr("a-string-key").exec();
+// [[Error: ERR value is not an integer, null]] — resolved, not rejected
+```
+
+Reading only the values (`raw.map(([, value]) => value)`) yields `null` and the
+batch looks successful while a write was dropped. Here every result carries an
+explicit `error`, labelled with the step that produced it.
+
+Two further gaps are closed: `EXEC` is bounded by `timeout`, since ioredis parks
+queued commands while reconnecting and would otherwise never settle; and command
+errors are passed through `redactError` before reaching a logger or an exception,
+because ioredis attaches the failing command's arguments and those are the
+password for `AUTH`. That redaction covers a rejected `EXEC` as well as the
+resolved per-command results.
+
+#### `pipelineValues(results)`
+
+Returns the successful values in order, throwing `PipelineCommandError` if any
+command failed. Use `result.results` directly when a partial batch is expected
+and worth handling.
+
+#### Errors
+
+- `PipelineTimeoutError` — the batch did not complete within `timeout`. Carries `steps`, the number of commands queued.
+- `PipelineCommandError` — a command failed and `throwOnError` was set, or `pipelineValues` was called on a failed batch. Carries `results`. The `message` lists step labels only, never command arguments.
+- `PipelineStepError` — a step did not queue exactly one command, so results would be paired with the wrong labels. Carries `label` and `queued`. Raised before `EXEC` is sent, so the batch is never executed.
+
+---
+
+## Common Patterns
+
+### 1. Read-Through Caching with TTL
+
+```typescript
+import { createClient } from "@oneunit/redis";
+
+const redis = createClient();
+
+async function getCachedUser(userId: string) {
+  const cacheKey = `user:${userId}`;
+
+  // 1. Try reading from Redis cache
+  const cached = await redis.get(cacheKey);
+  if (cached) {
+    return JSON.parse(cached);
+  }
+
+  // 2. Fall back to primary database
+  const user = await db.users.findById(userId);
+
+  // 3. Cache with 1-hour expiration (3600 seconds)
+  if (user) {
+    await redis.set(cacheKey, JSON.stringify(user), "EX", 3600);
+  }
+
+  return user;
+}
+
+// Invalidation helper
+async function invalidateUser(userId: string) {
+  await redis.del(`user:${userId}`);
+}
+```
+
+### 2. Session Store with Sliding Expiration
+
+```typescript
+import { createClient } from "@oneunit/redis";
+
+const redis = createClient();
+const SESSION_TTL = 1800; // 30 minutes
+
+async function touchSession(sessionId: string) {
+  // Reset the expiration timer without altering the session data
+  const updated = await redis.expire(`session:${sessionId}`, SESSION_TTL);
+  return updated === 1;
+}
+
+async function updateSession(sessionId: string, data: Record<string, unknown>) {
+  await redis.set(
+    `session:${sessionId}`,
+    JSON.stringify(data),
+    "EX",
+    SESSION_TTL,
+  );
+}
+```
+
+### 3. Pub/Sub Messaging
+
+> [!IMPORTANT]
+> Redis connections in subscriber mode cannot issue standard commands. Use dedicated clients for publisher and subscriber.
+
+```typescript
+import { createClient } from "@oneunit/redis";
+
+const publisher = createClient();
+const subscriber = createClient();
+
+// Listen on notifications channel
+await subscriber.subscribe("notifications");
+
+subscriber.on("message", (channel, message) => {
+  console.log(`Received message on ${channel}:`, JSON.parse(message));
 });
 
-process.on("SIGTERM", () => shutdown(redis));
+// Publish from the publisher client
+await publisher.publish(
+  "notifications",
+  JSON.stringify({ type: "ALERT", text: "System update available" }),
+);
 ```
 
-Logger is optional:
+### 4. Background Job Processing with Retries & Cleanup
 
-```javascript
-import { createClient, consoleLogger, silentLogger } from "@bootstrap-framework/redis";
+```typescript
+import {
+  createClient,
+  createQueue,
+  createWorker,
+  shutdown,
+} from "@oneunit/redis";
 
-createClient({}, consoleLogger);
-createClient({}, silentLogger);
+const redis = createClient();
+
+const reportQueue = createQueue({
+  name: "reports",
+  connection: redis,
+  defaultJobOptions: {
+    attempts: 5, // Override to 5 retries
+    backoff: { type: "exponential", delay: 2000 },
+  },
+});
+
+const reportWorker = createWorker({
+  name: "reports",
+  connection: redis,
+  concurrency: 2,
+  processor: async (job) => {
+    console.log(
+      `Generating report ${job.data.reportId} (attempt ${job.attemptsMade + 1})`,
+    );
+
+    // Simulate generation
+    await generatePdfReport(job.data);
+
+    return {
+      fileUrl: `https://storage.example.com/reports/${job.data.reportId}.pdf`,
+    };
+  },
+});
+
+await reportQueue.add("monthly-summary", {
+  reportId: "rep-2026-10",
+  month: 10,
+});
 ```
 
-## API
+### 5. Proper Teardown Order
 
-| Export | Description |
-| :--- | :--- |
-| `createClient(options?, logger?)` | ioredis client with event logging |
-| `shutdown(client, logger?)` | Graceful `quit()` |
-| `health(client)` | Ping-based health result |
-| `createQueue(config)` | BullMQ queue |
-| `createWorker(config)` | BullMQ worker |
-| `consoleLogger` / `silentLogger` | Built-in logger adapters |
+To prevent dropped jobs or connection errors during deployment and shutdown, tear down components in reverse order of creation:
 
-### `createClient` defaults
+```typescript
+async function gracefulTeardown() {
+  console.log("Shutting down workers and queues...");
 
-| Option | Value |
-| :--- | :--- |
-| `url` | `process.env.REDIS_URL` |
-| `lazyConnect` | `true` |
+  // 1. Close event listeners first
+  if (queueEvents) await queueEvents.close();
 
-### `createQueue` defaults
+  // 2. Stop workers to let active jobs finish
+  if (worker) await worker.close();
 
-| Option | Value |
-| :--- | :--- |
-| `prefix` | `"queue"` |
-| `attempts` | `3` |
-| `backoff` | Exponential, 1000ms |
-| `removeOnComplete` | Keep last 100 |
-| `removeOnFail` | Keep last 1000 |
+  // 3. Close queues
+  if (queue) await queue.close();
 
-## Environment variables
+  // 4. Finally, disconnect the Redis client
+  await shutdown(redis);
 
-| Variable | Description |
-| :--- | :--- |
-| `REDIS_URL` | Redis connection URL |
+  console.log("Redis teardown complete.");
+}
+```
+
+---
+
+## Runnable Examples
+
+The [`examples/`](./examples) directory contains working, standalone scripts demonstrating real-world patterns.
+
+To run them, ensure a Redis instance is listening on `localhost:6379` (or specify `REDIS_URL`):
+
+```bash
+npm run example:standalone    # Health check, SET/GET, atomic INCRBY, TTL
+npm run example:cache         # Read-through cache with TTL and SCAN-based invalidation
+npm run example:session       # Session lifecycle: create, update, sliding TTL, delete
+npm run example:pubsub        # Publish/subscribe across distinct client connections
+npm run example:queue-worker  # BullMQ producer, worker retries, backoff, and event logging
+npm run example:pipeline      # Batch many commands into one round trip with runPipeline
+```
+
+---
+
+## Environment Variables
+
+| Variable             | Default                  | Description                                                                     |
+| :------------------- | :----------------------- | :------------------------------------------------------------------------------ |
+| `REDIS_URL`          | `redis://localhost:6379` | Default connection URL used when `url` option is not passed to `createClient`.  |
+| `REDIS_SILENT`       | _unset_                  | Set to `true` to silence connection-event logging when running example scripts. |
+| `EXAMPLE_TIMEOUT_MS` | `5000`                   | Subscription wait bound used in pub/sub example.                                |
+
+---
+
+## Development & Verification
+
+```bash
+# Build TypeScript to dist/
+npm run build
+
+# Typecheck without emitting files
+npm run typecheck
+
+# Run test suite
+npm test
+
+# Run ESLint
+npm run lint
+
+# Comprehensive verification (build, typecheck, lint, test, pack check)
+npm run verify
+```
+
+Two things about `npm test` that are easy to trip over:
+
+- **Build first.** The suite imports `../dist/index.js`, not `src`, and `dist/`
+  is gitignored — so on a fresh checkout the tests cannot even load until
+  `npm run build` has run. `npm run verify` orders this correctly; the
+  individual scripts do not.
+- **A Redis on `localhost:6379` gives real coverage.** The queue, worker,
+  pipeline, and performance tests need a live server and return early without
+  one, so the suite is green either way — but with no server those tests are
+  no-ops. CI starts a `redis` service container for exactly this reason. An
+  unguarded `await client.ping()` does not merely fail without a server, it
+  never settles, because `maxRetriesPerRequest` defaults to `null`; see
+  [CONTRIBUTING.md](./CONTRIBUTING.md).
+
+---
+
+## Architecture & Contributing
+
+- For deep-dives into design decisions, timeout guarantees, and BullMQ interoperability, read [ARCHITECTURE.md](./ARCHITECTURE.md).
+- To contribute or run the regression test suites, see [CONTRIBUTING.md](./CONTRIBUTING.md).
+- To see recent changes and bug fixes, see [CHANGELOG.md](./CHANGELOG.md).
+
+---
 
 ## License
 
-MIT. Copyright (c) 2026 mayank.
+[MIT](./LICENSE) &copy; 2026 mayank

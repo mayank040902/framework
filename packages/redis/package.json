@@ -1,7 +1,7 @@
 {
-  "name": "@bootstrap-framework/redis",
+  "name": "@oneunit/redis",
   "version": "1.0.0",
-  "description": "Production-ready Redis client and BullMQ queue utilities for Node.js. Works standalone or with any framework logger.",
+  "description": "Redis client and BullMQ job queues for Node.js. Works standalone or with any logger that has error, warn, info, and debug.",
   "type": "module",
   "main": "./dist/index.js",
   "module": "./dist/index.js",
@@ -22,30 +22,41 @@
       "import": "./dist/queue/index.js",
       "default": "./dist/queue/index.js"
     },
+    "./pipeline": {
+      "types": "./dist/pipeline/index.d.ts",
+      "import": "./dist/pipeline/index.js",
+      "default": "./dist/pipeline/index.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [
     "dist",
+    "src",
     "examples",
     "LICENSE",
     "README.md",
+    "ARCHITECTURE.md",
+    "CONTRIBUTING.md",
     "CHANGELOG.md"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "clean": "node -e \"const fs=require('node:fs');for(const p of ['dist','tsconfig.tsbuildinfo'])fs.rmSync(p,{recursive:true,force:true})\"",
+    "build": "npm run clean && tsc -p tsconfig.json",
     "dev": "tsc -w -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "tsx --test test/*.test.ts",
     "test:watch": "tsx --test --watch test/*.test.ts",
     "lint": "eslint src test",
-    "example:standalone": "node examples/standalone.js",
-    "example:cache": "node examples/cache.js",
-    "example:session": "node examples/session.js",
-    "example:pubsub": "node examples/pubsub.js",
-    "example:queue-worker": "node examples/queue-worker.js",
+    "example:standalone": "npm run build && node examples/standalone.js",
+    "example:cache": "npm run build && node examples/cache.js",
+    "example:session": "npm run build && node examples/session.js",
+    "example:pipeline": "npm run build && node examples/pipeline.js",
+    "example:pubsub": "npm run build && node examples/pubsub.js",
+    "example:queue-worker": "npm run build && node examples/queue-worker.js",
     "prepack": "npm run build",
     "prepublishOnly": "npm run build && npm test",
-    "pack:check": "npm pack --dry-run"
+    "pack:check": "npm pack --dry-run",
+    "verify": "npm run build && npm run typecheck && npm run lint && npm test && npm run pack:check"
   },
   "keywords": [
     "redis",
@@ -57,7 +68,7 @@
     "session",
     "nodejs",
     "microservice",
-    "bootstrap-framework"
+    "oneunit"
   ],
   "author": "mayank",
   "license": "MIT",
@@ -71,13 +82,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/mayank040902/framework.git",
+    "url": "git+https://github.com/mayank040902/oneunit.git",
     "directory": "packages/redis"
   },
   "bugs": {
-    "url": "https://github.com/mayank040902/framework/issues"
+    "url": "https://github.com/mayank040902/oneunit/issues"
   },
-  "homepage": "https://github.com/mayank040902/framework/tree/main/packages/redis#readme",
+  "homepage": "https://github.com/mayank040902/oneunit/tree/master/packages/redis#readme",
   "dependencies": {
     "bullmq": "^5.80.9",
     "ioredis": "^5.11.1"

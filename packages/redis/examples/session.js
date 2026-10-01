@@ -1,69 +1,145 @@
-import { createClient, shutdown, silentLogger } from "../dist/index.js";
+/**
+ * Session store on Redis.
+ *
+ *   npm run example:session
+ *
+ * Environment:
+ *   REDIS_URL    connection URL (default redis://localhost:6379)
+ *   REDIS_SILENT set to "true" to suppress connection-event logging
+ *
+ * Sessions belong in Redis rather than in process memory for two reasons: they
+ * survive a restart, and they are visible to every instance behind a load
+ * balancer. The TTL is what bounds their lifetime, so it is set on write and
+ * refreshed on activity.
+ */
 
-const url = process.env.REDIS_URL ?? "redis://localhost:6379";
-const SESSION_TTL = 3600;
+import { randomUUID } from "node:crypto";
+import { createClient, health, shutdown } from "@oneunit/redis";
+import { REDIS_URL, exampleLogger, onFailure, release, run } from "./_setup.js";
 
-const client = createClient({ url }, process.env.REDIS_SILENT === "true" ? silentLogger : undefined);
+const SESSION_TTL_SECONDS = 3600;
+const KEY_PREFIX = "example:session:";
 
-const sessions = {
+await run("session", async () => {
+  const client = createClient({ url: REDIS_URL }, exampleLogger);
+  onFailure(() => shutdown(client, exampleLogger));
+
+  const healthResult = await health(client);
+  if (healthResult.status === "down") {
+    // Always shut down, including on this early exit: ioredis retries in the
+    // background, so a client left open keeps the event loop alive and the
+    // script never exits.
+    console.log("Redis is not reachable, stopping here.");
+    console.log("Health:", healthResult);
+    await release();
+    return;
+  }
+
+  const key = (sessionId) => `${KEY_PREFIX}${sessionId}`;
+
+  const sessions = {
     async create(userId, data = {}) {
-        const sessionId = crypto.randomUUID();
-        const session = {
-            id: sessionId,
-            userId,
-            createdAt: Date.now(),
-            ...data,
-        };
-        await client.setex(`session:${sessionId}`, SESSION_TTL, JSON.stringify(session));
-        return session;
+      const session = {
+        id: randomUUID(),
+        userId,
+        createdAt: Date.now(),
+        ...data,
+      };
+
+      await client.setex(
+        key(session.id),
+        SESSION_TTL_SECONDS,
+        JSON.stringify(session),
+      );
+
+      return session;
     },
-    
+
     async get(sessionId) {
-        const data = await client.get(`session:${sessionId}`);
-        return data ? JSON.parse(data) : null;
+      // Returns null rather than throwing for a missing session, so callers
+      // treat "no session" and "expired session" the same way.
+      const raw = await client.get(key(sessionId));
+      return raw === null ? null : JSON.parse(raw);
     },
-    
-    async update(sessionId, data) {
-        const session = await this.get(sessionId);
-        if (!session) return null;
-        
-        const updated = { ...session, ...data, updatedAt: Date.now() };
-        await client.setex(`session:${sessionId}`, SESSION_TTL, JSON.stringify(updated));
-        return updated;
-    },
-    
-    async delete(sessionId) {
-        return client.del(`session:${sessionId}`);
-    },
-    
-    async extend(sessionId, ttl = SESSION_TTL) {
-        return client.expire(`session:${sessionId}`, ttl);
-    },
-};
 
-async function runDemo() {
-    console.log("=== Create session ===");
-    const session = await sessions.create("user-123", { role: "admin", permissions: ["read", "write"] });
-    console.log("Created:", session);
-    
-    console.log("\n=== Get session ===");
-    const retrieved = await sessions.get(session.id);
-    console.log("Retrieved:", retrieved);
-    
-    console.log("\n=== Update session ===");
-    const updated = await sessions.update(session.id, { lastActivity: Date.now() });
-    console.log("Updated:", updated);
-    
-    console.log("\n=== Extend session TTL ===");
-    await sessions.extend(session.id, 7200);
-    console.log("Extended to 2 hours");
-    
-    console.log("\n=== Delete session ===");
-    await sessions.delete(session.id);
-    const deleted = await sessions.get(session.id);
-    console.log("Deleted, get returns:", deleted);
-    
-    await shutdown(client);
-}
+    async update(sessionId, patch) {
+      const existing = await sessions.get(sessionId);
+      if (!existing) {
+        return null;
+      }
 
-runDemo().catch(console.error);
+      const updated = { ...existing, ...patch, updatedAt: Date.now() };
+
+      // Rewriting with SETEX resets the TTL to the full window. Refresh on
+      // a sliding window only; an absolute-expiry session would use PERSIST
+      // here instead so the original deadline stands.
+      await client.setex(
+        key(sessionId),
+        SESSION_TTL_SECONDS,
+        JSON.stringify(updated),
+      );
+
+      return updated;
+    },
+
+    async extend(sessionId, ttlSeconds = SESSION_TTL_SECONDS) {
+      // EXPIRE on a missing key returns 0, not 1, which is the cheapest way
+      // to tell whether the session was still alive.
+      return client.expire(key(sessionId), ttlSeconds);
+    },
+
+    async touch(sessionId) {
+      // Refresh the TTL without reading or rewriting the payload.
+      return sessions.extend(sessionId);
+    },
+
+    async destroy(sessionId) {
+      return client.del(key(sessionId));
+    },
+  };
+
+  console.log("Create:");
+  const session = await sessions.create("user-123", {
+    role: "admin",
+    permissions: ["read", "write"],
+  });
+  console.log("  ", session);
+  console.log("   TTL:", await client.ttl(key(session.id)), "seconds");
+
+  console.log("\nGet:");
+  console.log("  ", await sessions.get(session.id));
+
+  console.log("\nGet a session that does not exist:");
+  console.log("  ", await sessions.get("not-a-real-session"));
+
+  console.log("\nUpdate:");
+  const updated = await sessions.update(session.id, {
+    lastActivity: Date.now(),
+  });
+  console.log(
+    "   role:",
+    updated.role,
+    "| updatedAt set:",
+    updated.updatedAt > updated.createdAt,
+  );
+
+  console.log("\nExtend the TTL to 2 hours:");
+  const extended = await sessions.extend(session.id, 7200);
+  console.log(
+    "   EXPIRE returned",
+    extended,
+    "| TTL now:",
+    await client.ttl(key(session.id)),
+  );
+
+  console.log("\nTouch (refresh TTL without rewriting the payload):");
+  await sessions.touch(session.id);
+  console.log("   TTL:", await client.ttl(key(session.id)));
+
+  console.log("\nDestroy:");
+  console.log("   DEL removed", await sessions.destroy(session.id), "key(s)");
+  console.log("   get after destroy:", await sessions.get(session.id));
+
+  await release();
+  console.log("\nDisconnected cleanly.");
+});
