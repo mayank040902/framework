@@ -1,8 +1,25 @@
 # @oneunit/logger
 
-Structured logging built on [Pino](https://getpino.io). Fastify-friendly HTTP logging, serializers, and optional pretty transport.
+High-performance, secure-by-default structured logging built on [Pino](https://getpino.io). Includes Fastify and HTTP integration, automatic deep redaction, URL sanitization, serializer utilities, and transport builders.
 
 Monorepo: https://github.com/mayank040902/oneunit
+
+---
+
+## Features
+
+- **Pino Powered**: Returns standard `pino.Logger` instances with full access to Pino's native API, speed, and ecosystem.
+- **Deep Redaction**: Masks sensitive keys (`password`, `token`, `secret`, `apiKey`, `authorization`, `cookie`, `sessionid`, etc.) across plain objects and arrays at arbitrary nesting depths and with any casing.
+- **Active in Every Mode**: Redaction runs in `production`, `development`, and `test` alike so secrets never leak to local dev terminals or test outputs.
+- **URL Sanitization**: Automatically strips query strings from URLs (`url`, `originalUrl`, `href`, `referer`, etc.) across application logs, serializers, and HTTP middleware.
+- **Safe Child Loggers**: Child bindings are redacted before Pino pre-serializes them, preventing credential leaks in `logger.child({ apiKey })`.
+- **Diagnostic Integrity**: Non-enumerable properties (`message`) and accessors (`stack`) are preserved so `Error` instances keep their stack trace and `instanceof Error` identity.
+- **Copy-on-Write**: Zero unnecessary allocations on clean log calls; caller payloads are never mutated.
+- **Fastify & HTTP Ready**: Built-in request, response, and error serializers with correlation ID tracking and `pino-http` middleware support.
+- **Transport Builders**: First-class support for `pretty`, `file`, and `stream` transports with multi-destination dispatch and per-target log levels.
+- **Subpath Exports**: Import modular components directly via clean subpaths.
+
+---
 
 ## Install
 
@@ -12,248 +29,333 @@ npm install @oneunit/logger
 
 Requires **Node.js 20+**.
 
-`pino-pretty` is an optional peer. Install it for development pretty-print:
+### Optional Pretty Printing
+
+`pino-pretty` is an optional peer dependency. Install it for colored, formatted output in development:
 
 ```bash
-npm install pino-pretty
+npm install -D pino-pretty
 ```
 
-## Quick start
+---
 
-```javascript
+## Quick Start
+
+```typescript
 import { createLogger } from "@oneunit/logger";
 
 const logger = createLogger({ mode: "development" });
 
-logger.info("service started");
-logger.warn({ userId: "42" }, "slow query");
-logger.error(new Error("boom"), "request failed");
+logger.info("Service initialized");
+logger.warn({ latencyMs: 340 }, "Database query took longer than threshold");
+logger.error(new Error("Connection reset"), "Upstream service failure");
 
-const child = logger.child({ requestId: "abc-123" });
-child.info("handling request");
+// Child loggers inherit parent configuration and redact bindings automatically
+const child = logger.child({ requestId: "req-123", apiKey: "secret_live_key" });
+child.info("Handling request");
+// -> { "requestId": "req-123", "apiKey": "[REDACTED]", "msg": "Handling request" }
 ```
 
-## HTTP logger
+---
 
-```javascript
-import { createHttpLogger } from "@oneunit/logger";
+## Subpath Exports
 
-const httpLogger = createHttpLogger({
-    loggerOptions: { mode: "production" },
-});
-```
+In addition to importing from the root package `@oneunit/logger`, modular entry points are exposed:
+
+| Subpath | Exports |
+| :--- | :--- |
+| `@oneunit/logger` | Full public API surface and Pino types |
+| `@oneunit/logger/logger` | `createLogger`, `createChildLogger`, `LoggerOptions` |
+| `@oneunit/logger/config` | `defineConfig`, `redactLogObject`, `redactBindings` |
+| `@oneunit/logger/http` | `createHttpLogger`, `HttpLoggerOptions` |
+| `@oneunit/logger/serialize` | `createSerializers`, `SerializerOptions`, `CustomRequest`, `CustomResponse` |
+| `@oneunit/logger/transport` | `createTransport`, `createMultiTransport`, `TransportOptions` |
+
+---
+
+## HTTP Logging
 
 ### Fastify
 
-Pass the logger through `loggerInstance`, **not** `logger`. Handing Fastify the
-`pino-http` middleware as `logger` makes Fastify construct its own logger, which
-bypasses this package's serializers and redaction:
+Pass the logger via `loggerInstance`, **not** `logger`. Handing Fastify a logger configuration or middleware under the `logger` key causes Fastify 5 to instantiate its own Pino instance, which silently bypasses this package's serializers, redaction, and level formatting:
 
-```javascript
+```typescript
 import Fastify from "fastify";
 import { createLogger } from "@oneunit/logger";
 
 const fastify = Fastify({
     loggerInstance: createLogger({ mode: "production" }),
 });
+
+fastify.get("/users", async (request) => {
+    // request.url query strings are automatically stripped in logs
+    request.log.info({ query: request.query }, "Fetched users");
+    return { status: "ok" };
+});
 ```
 
-## API
+### Standard HTTP & Express Middleware
 
-| Export | Description |
-| :--- | :--- |
-| `createLogger(options?)` | Pino logger with env-aware defaults |
-| `createChildLogger(logger, bindings?)` | Child logger |
-| `createHttpLogger(options?)` | `pino-http` middleware |
-| `defineConfig(options?)` | Pino options for development, production, and test |
-| `createSerializers(options?)` | Request, response, and error serializers |
-| `createTransport(options?)` | Pretty, file, or stream transport |
-| `createMultiTransport(transports)` | Multiple destinations with per-target levels |
-| `redactLogObject(object)` | Mask sensitive keys anywhere in a payload |
+`createHttpLogger` wraps `pino-http` with security-hardened serializers:
 
-`createLogger` modes:
+```typescript
+import http from "node:http";
+import { createLogger, createHttpLogger } from "@oneunit/logger";
 
-| Mode | Level | Notes |
-| :--- | :--- | :--- |
-| `development` | `trace` | Verbose local logging |
-| `production` | `info` | Default mode |
-| `test` | `silent` | Quiet unit tests |
-
-`createLogger` options:
-
-| Option | Description |
-| :--- | :--- |
-| `mode` | One of the modes above; defaults to `production` |
-| `serializers` | Passed to `createSerializers` (`excludeQueryString`, `excludeHeaders`, `excludeQuery`) |
-| `childBindings` | Bindings attached to the returned logger, redacted before use |
-| `destination` | Writable stream (or a `pino.transport()` worker) to write to; defaults to stdout |
-| `pino` | Escape hatch for remaining pino options |
-
-`destination` is a first-class option because pino only accepts a destination as
-a *separate* argument. Passing `{ destination: stream }` inside a pino options
-object is silently ignored by pino, which is a common way to lose log output in
-tests.
-
-```ts
-import { Writable } from "node:stream";
-import { createLogger } from "@oneunit/logger";
-
-const lines: string[] = [];
-const stream = new Writable({
-    write(chunk, _encoding, callback) {
-        lines.push(chunk.toString());
-        callback();
+const logger = createLogger({ mode: "production" });
+const httpLogger = createHttpLogger({
+    logger,
+    serializers: {
+        excludeQueryString: true, // default
     },
 });
 
-const logger = createLogger({ mode: "production", destination: stream });
+const server = http.createServer((req, res) => {
+    httpLogger(req, res);
+    res.end("OK");
+});
 ```
 
-### Redaction
+---
 
-Sensitive keys (`password`, `token`, `authorization`, `cookie`, `apiKey`,
-`clientSecret`, `privateKey`, …) are masked in **every** mode, at any nesting
-depth and regardless of casing, so secrets cannot reach a log sink from a local
-development run. This includes child logger bindings
-(`logger.child({ apiKey })`).
+## Transports & Multi-Destination
 
-Redaction never degrades an error's diagnostic value. An `Error` carrying a
-sensitive property keeps its `type`, `message`, and `stack`: the original is
-copied with its prototype and non-enumerable properties intact, so pino's error
-serializer still recognizes it and the log line still carries the trace.
+Use `createTransport` and `createMultiTransport` to create Pino transport configurations for terminal pretty-printing, file logging, or writable streams:
 
-Errors are also left completely untouched when they have nothing to mask.
+### Pretty Transport
 
-Query strings are stripped from logged URLs by default. This applies both to
-the `req.url` produced by `createSerializers` / `createHttpLogger` **and** to a
-URL logged directly by application code:
+```typescript
+import pino from "pino";
+import { createLogger, createTransport } from "@oneunit/logger";
 
-```javascript
-logger.info({ url: request.url }, "handling request");
-// -> { "url": "/pay" }   even when request.url is "/pay?token=secret"
+const transport = pino.transport(createTransport({
+    target: "pretty",
+    level: "debug",
+}));
+
+const logger = createLogger({ destination: transport });
 ```
 
-The same stripping applies to `originalUrl`, `requestUrl`, `href`, `referer`,
-and `referrer`, at any depth and inside arrays. Without it the "query strings
-are stripped" guarantee would hold only for the `req` key while the very common
-`logger.info({ url: request.url })` shape leaked the token in plaintext.
+### Multi-Destination Logging
 
-The parsed `query` object is still emitted where a framework provides one, with
-sensitive keys masked. Pass `excludeQueryString: false` to keep the raw query
-string in `req.url` — only do that when you are certain no sensitive parameter
-is ever present, because a raw query string is not masked per-key.
+Route logs to multiple targets with independent log levels:
 
-`createSerializers` and `createHttpLogger` also accept `excludeHeaders` and
-`excludeQuery` to omit those fields entirely.
+```typescript
+import pino from "pino";
+import { createLogger, createMultiTransport } from "@oneunit/logger";
 
-### Redaction scope: plain data only
+const multi = pino.transport(createMultiTransport([
+    { target: "pretty", level: "info" },
+    { target: "file", destination: "/var/log/app/debug.log", level: "debug" },
+]));
 
-Package-level redaction walks **plain objects and arrays**, at any depth. It
-does **not** walk class instances, model objects, streams, or any other
-non-plain runtime object bound as a value. Those are passed through by
-reference and left to pino's own serialization:
-
-```ts
-class UserModel {
-    password = "secret";
-}
-
-logger.child({ user: new UserModel() }).info("hi");
-// -> user.password is NOT masked
+const logger = createLogger({ destination: multi });
 ```
 
-This is a deliberate trade. Deep-walking a binding costs a full object-graph
-traversal on **every** log call, and bindings routinely hold live objects such
-as an `IncomingMessage` whose graph runs
-`socket -> connection -> parser -> ...`. Measured cost for that path fell from
-~26.8 us/call to ~0.7 us/call by not traversing.
+Supported transport targets:
+- `"pretty"`: Uses `pino-pretty` with default colorization and timestamp formatting. Destination can be stdout, a file path, or a writable stream.
+- `"file"`: Writes logs to a file path via `pino/file`. Requires string `destination`.
+- `"stream"`: Writes logs directly to a `NodeJS.WritableStream`. Requires `destination`.
 
-Structured `req`/`res` bindings are still covered: their sensitive fields are
-handled by pino's native `redact` paths, which apply to bindings as well.
+---
 
-If you need a specific value masked, bind it as a plain object
-(`logger.child({ user: { password: user.password } })`) or redact it at the
-call site. The test suite asserts this behavior deliberately, so a change that
-starts traversing instances has to revisit the performance cost.
+## API Reference
+
+### Exported Functions
+
+| Function | Description |
+| :--- | :--- |
+| `createLogger(options?)` | Creates a Pino logger with env-aware defaults, redaction, and child wrapping |
+| `createChildLogger(logger, bindings?)` | Safely creates a child logger (no-op when bindings are empty) |
+| `createHttpLogger(options?)` | `pino-http` middleware with pre-configured serializers |
+| `defineConfig(options?)` | Generates Pino configuration options for development, production, and test |
+| `createSerializers(options?)` | Builds request, response, and error serializers with sanitization |
+| `createTransport(options?)` | Builds a Pino transport target definition (`pretty`, `file`, or `stream`) |
+| `createMultiTransport(transports)` | Builds a multi-target Pino transport definition with per-target levels |
+| `redactLogObject(object)` | Pure utility to mask sensitive keys in an object without mutation |
+| `redactBindings(bindings)` | Masks sensitive keys in logger child bindings |
+
+### Exported Types
+
+| Type | Description |
+| :--- | :--- |
+| `Logger` | Alias for `pino.Logger` |
+| `Level` | Alias for `pino.Level` (`"fatal"` \| `"error"` \| `"warn"` \| `"info"` \| `"debug"` \| `"trace"`) |
+| `LevelWithSilent` | Alias for `pino.LevelWithSilent` |
+| `DestinationStream` | Alias for `pino.DestinationStream` |
+| `LoggerOptions` | Configuration options for `createLogger` |
+| `HttpLoggerOptions` | Configuration options for `createHttpLogger` |
+| `SerializerOptions` | Options controlling headers, query, and query string emission |
+| `TransportOptions` | Target, destination, level, and options for `createTransport` |
+| `CustomRequest` | Request interface accepted by `createSerializers().req` |
+| `CustomResponse` | Response interface accepted by `createSerializers().res` |
+
+---
+
+## Configuration Options
+
+### `createLogger(options)`
+
+| Option | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `mode` | `"development"` \| `"production"` \| `"test"` | `"production"` | Controls default log level and environment settings |
+| `destination` | `NodeJS.WritableStream` | `process.stdout` | Destination stream or `pino.transport()` worker |
+| `childBindings` | `Record<string, unknown>` | `undefined` | Initial bindings attached to the logger (automatically redacted) |
+| `serializers` | `SerializerOptions` | `undefined` | Custom serializer options passed to `createSerializers` |
+| `pino` | `pino.LoggerOptions` | `undefined` | Escape hatch for remaining Pino options (excluding formatters/serializers) |
+
+Modes:
+
+| Mode | Level | Notes |
+| :--- | :--- | :--- |
+| `production` | `info` | Default mode; structured JSON output with ISO timestamps and PID/hostname |
+| `development` | `trace` | Verbose local output capturing all log levels |
+| `test` | `silent` | Silences output to keep test test runner reports clean |
+
+> **Note on `destination`:** `destination` is a top-level option on `createLogger` because Pino only accepts destinations as a separate argument. Passing `{ destination }` inside a nested Pino options object is silently ignored by Pino, which can result in lost output.
+
+### `createSerializers(options)`
+
+| Option | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `excludeQueryString` | `boolean` | `true` | When `true`, strips query parameters from `req.url` and omits `req.queryString` |
+| `excludeHeaders` | `boolean` | `false` | When `true`, omits headers from serialized `req` and `res` objects |
+| `excludeQuery` | `boolean` | `false` | When `true`, omits the parsed `req.query` object |
+
+Serialized fields:
+- `req`: `id`, `method`, `url`, `host`, `hostname`, `correlationId` (from `x-correlation-id`), `remoteAddress`, `remotePort`, `protocol`, `headers`, `query`, `queryString`.
+- `res`: `statusCode` (omitted if uncommitted/null to prevent noise), `headers`.
+- `err`: Serialized via standard `pino-std-serializers`.
+
+---
+
+## Security & Redaction
+
+### Redaction Pipeline
+
+Redaction is layered deliberately across the logging pipeline:
+
+```text
+caller calls logger.info(payload)
+        │
+        ▼
+formatters.log  ──►  redactLogObject (our recursive walker)      [Runs FIRST]
+        │
+        ▼
+pino serializers ──► createSerializers (req / res / err)         [Runs SECOND]
+        │
+        ▼
+redact.paths    ──►  fast-redact stringifiers                   [Runs LAST]
+        │
+        ▼
+JSON.stringify  ──►  destination stream
+```
+
+1. **`redactLogObject` runs before serializers**: Framework-parsed queries (e.g. Fastify's `request.query`) have sensitive properties masked before `createSerializers` copies them.
+2. **Errors are preserved**: The walker preserves prototypes, non-enumerable properties (`message`), and accessors (`stack`) so that errors pass Pino's internal `instanceof Error` checks without loss of diagnostic context.
+3. **`redact.paths` covers post-serialization headers**: Fields that only exist after serialization (such as `res.headers`) are masked by fast-redact paths.
+
+### Masked Keys
+
+The following keys are matched **case-insensitively** at any nesting depth and replaced with `"[REDACTED]"`:
+
+- **Passwords**: `password`, `passwordhash`, `password_hash`, `passwd`, `pwd`
+- **Tokens**: `token`, `accesstoken`, `refreshtoken`, `idtoken`
+- **Secrets**: `secret`, `clientsecret`, `client_secret`
+- **Keys**: `privatekey`, `private_key`, `apikey`, `api_key`
+- **Auth & Session**: `authorization`, `proxy-authorization`, `cookie`, `set-cookie`, `sessionid`
+- **Headers**: `authorization`, `proxy-authorization`, `cookie`, `set-cookie`, `x-api-key`, `x-auth-token`
+
+### URL Query Stripping
+
+Query strings are stripped from any field whose name indicates a URL (`url`, `originalUrl`, `requestUrl`, `href`, `referer`, `referrer`), regardless of depth or casing:
+
+```typescript
+logger.info({ url: "https://api.example.com/checkout?token=secret123" });
+// Emitted: { "url": "https://api.example.com/checkout" }
+```
+
+### Scope: Plain Data vs. Class Instances
+
+The recursive walker inspects **plain objects and arrays** (up to a recursion limit of 100).
+
+It deliberately **does not** walk complex runtime class instances, models, sockets, or streams (e.g. `IncomingMessage`). Non-plain objects are passed through by reference to avoid expensive object-graph traversals on hot paths (reducing overhead from ~26.8µs to ~0.7µs per call). To mask properties on class instances, bind them as plain objects or redact at call site.
+
+---
 
 ## Development
 
 ```bash
-pnpm install
-pnpm --filter @oneunit/logger verify     # build + typecheck + examples + test + pack
+# Install dependencies
+npm install
+
+# Run complete verification (build, typecheck, examples, test, pack check)
+npm run verify
 ```
 
-`verify` is the exact check set `prepublishOnly` runs. Individually:
+### Available Scripts
+
+| Script | Description |
+| :--- | :--- |
+| `npm run build` | Compiles TypeScript to `dist/` |
+| `npm run dev` | Watches and compiles TypeScript |
+| `npm run typecheck` | Checks source code and tests (`tsconfig.json` & `tsconfig.test.json`) |
+| `npm run typecheck:examples` | Checks examples against compiled types in `dist/` |
+| `npm test` | Runs the complete Vitest test suite |
+| `npm run test:watch` | Runs tests in watch mode |
+| `npm run test:security` | Runs security regression suite (redaction, casing, error handling, invariants) |
+| `npm run test:integration` | Runs Fastify and `pino-http` real server tests |
+| `npm run test:serializers` | Runs serializer tests |
+| `npm run test:api` | Verifies the public API surface |
+| `npm run test:perf` | Runs cost-shape and traversal regression tests |
+| `npm run pack:check` | Verifies the published npm package contents via dry run |
+| `npm run verify` | Full CI verification suite |
+
+### Monorepo Workspaces
+
+If invoking from the monorepo root:
 
 ```bash
-pnpm --filter @oneunit/logger test              # 248 tests
-pnpm --filter @oneunit/logger typecheck         # source and tests
-pnpm --filter @oneunit/logger typecheck:examples
-pnpm --filter @oneunit/logger build
+pnpm --filter @oneunit/logger verify
+pnpm --filter @oneunit/logger test
 ```
 
-`typecheck:examples` is separate from `typecheck` because the examples import
-from `dist`, so it needs a build first.
+---
 
-Targeted suites:
+## Runnable Examples
 
-| Script | Covers |
-| :-- | :-- |
-| `test:security` | Redaction by key position and casing, errors, child bindings, hostile payloads, mutation, security invariants |
-| `test:integration` | Real Fastify server and real `pino-http` request, including the documented anti-pattern |
-| `test:serializers` | Request/response shape, header and query casing, malformed input |
-| `test:perf` | Cost-shape regressions, including a guard against object-graph traversal |
-| `test:api` | Public export surface |
+Run examples directly after compiling:
 
-## Examples
+```bash
+npm run build
+npm run example            # Core walkthrough: modes, redaction, child loggers, errors
+npm run example:http       # Real HTTP request with sanitized queries and headers
+npm run example:fastify    # Fastify server with loggerInstance integration
+```
 
-`npm run build` first — the examples import the built `dist`.
+---
 
-| Script | File | Shows |
-| :-- | :-- | :-- |
-| `npm run example` | `examples/ts/logger-example.ts` | Modes, redaction at depth, child loggers, errors, the pino escape hatch, `redactLogObject` |
-| `npm run example:http` | `examples/ts/http-example.ts` | A real `pino-http` request with secrets in the query string, `authorization`, `cookie`, and `x-api-key` |
-| `npm run example:fastify` | `examples/ts/fastify-example.ts` | The correct `loggerInstance` integration; run it and try `curl "http://127.0.0.1:3000/hello?token=secret"` |
+## Documentation
 
-Examples are typechecked by `npm run typecheck:examples` so they cannot drift
-from the API unnoticed.
+- [ARCHITECTURE.md](./ARCHITECTURE.md) — Pino pipeline mechanics, redaction ordering, and performance tradeoffs.
+- [CONTRIBUTING.md](./CONTRIBUTING.md) — Security policies, testing requirements, and contributing guidelines.
+- [CHANGELOG.md](./CHANGELOG.md) — Release notes and version history.
 
-## Further reading
+---
 
-- [ARCHITECTURE.md](./ARCHITECTURE.md) — the pino pipeline, why redaction runs
-  before serialization, and the plain-vs-runtime object boundary.
-- [CONTRIBUTING.md](./CONTRIBUTING.md) — security disclosure, required checks,
-  and the behaviors that look like bugs but are deliberate.
-- [CHANGELOG.md](./CHANGELOG.md) — release history.
+## Publishing
 
-## Releasing
-
-Publishing is driven by a git tag, never by a push to `main`:
+Publishing is driven by git tags and automated via GitHub Actions with npm OIDC Trusted Publishing:
 
 ```bash
 git tag logger-v1.0.0
 git push origin logger-v1.0.0
 ```
 
-`.github/workflows/logger.yml` runs the full check set on Node 20, 22, and 24,
-then installs the real tarball into a clean project and exercises the public API
-against it — including that no secret reaches the sink, that errors keep their
-`message` and `stack`, and that every subpath export resolves. Only then does
-the publish job upload, after checking the tag matches `package.json`. npm
-refuses to reuse a version number, so that check turns a typo into a clear
-failure instead of a release that cannot be retried.
+The workflow runs the full check matrix on Node 20, 22, and 24, verifies clean tarball installation, validates subpath imports, and ensures version parity before publishing.
 
-The workflow uses npm Trusted Publishing (OIDC), so no long-lived npm token is
-stored in the repository. Add the trusted publisher on npmjs.com under package
-settings, pointing at repository `mayank040902/oneunit` and workflow
-`logger.yml`.
-
-## Renamed
-
-This package was previously published as `@bootstrap-framework/logger`. It is
-now **`@oneunit/logger`**; the old name is not published and will not resolve.
-Update your dependency and import to `@oneunit/logger`.
+---
 
 ## License
 
-MIT. Copyright (c) 2026 mayank.
+MIT © 2026 mayank
