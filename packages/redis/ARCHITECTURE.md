@@ -26,25 +26,36 @@ is what lets this package be used in a worker with no logging library present.
 ```text
 src/
   index.ts        Public surface. Re-exports the four subtrees.
-  logger.ts       Logger interface, silent/console adapters, duck-typing helpers.
+  logger.ts       Logger interface, silent/console/normalize adapters, duck-typing helpers.
 
   client/
     index.ts      Barrel for the client subtree.
-    client.ts     createClient: the ioredis instance and its defaults.
-    events.ts     attachEvents: maps ioredis events onto the logger.
-    check.ts      health: bounded PING with latency.
-    shutdown.ts   shutdown: graceful QUIT, idempotent.
+    client.ts     createClient: ioredis instance, URL handling, and BullMQ-safe defaults.
+    events.ts     attachEvents, redactError: maps ioredis events onto logger, sanitizes secrets.
+    check.ts      health: bounded PING with latency measurement.
+    shutdown.ts   shutdown: graceful QUIT, idempotent teardown, WeakSet forced disconnect tracking.
 
   queue/
     index.ts      Barrel for the queue subtree.
-    queue.ts      createQueue: BullMQ Queue plus job defaults.
-    worker.ts     createWorker: BullMQ Worker.
-    events.ts     attachQueueEvents: BullMQ QueueEvents wired to a logger.
+    queue.ts      createQueue: BullMQ Queue with safe job defaults and per-key option merging.
+    worker.ts     createWorker: BullMQ Worker with selective option forwarding.
+    events.ts     attachQueueEvents: ManagedQueueEvents wired to logger with prefix inheritance.
 
   pipeline/
     index.ts      Barrel for the pipeline subtree.
-    builder.ts    runPipeline: batched commands, per-command results.
+    builder.ts    runPipeline, pipelineValues: batched commands, positional enforcement, bounded timeout, error redaction.
 ```
+
+### Subpath Exports & Modular Boundaries
+
+The package configures granular subpath exports in `package.json` to allow consumers to import isolated components without loading unnecessary modules:
+
+| Subpath                   | Target File                 | Purpose & Dependency Surface                                              |
+| :------------------------ | :-------------------------- | :------------------------------------------------------------------------ |
+| `@oneunit/redis`          | `./dist/index.js`           | Full public surface (client, queues, workers, events, logger, pipeline).  |
+| `@oneunit/redis/client`   | `./dist/client/index.js`    | Redis client, health checks, shutdown, events. **Zero BullMQ imports**.  |
+| `@oneunit/redis/queue`    | `./dist/queue/index.js`     | BullMQ Queue, Worker, and QueueEvents. Accepts an injected Redis client.  |
+| `@oneunit/redis/pipeline` | `./dist/pipeline/index.js`  | Pipeline execution (`runPipeline`, `pipelineValues`). Isolated batching.  |
 
 `client/` and `queue/` never import each other. The queue subtree knows nothing
 about health checks or event logging; it takes a connection you hand it and
@@ -242,6 +253,28 @@ absorb. The string checks remain as a fallback, because `instanceof` cannot matc
 across two copies of `bullmq` in one tree.
 
 ## Pipelines
+
+```mermaid
+sequenceDiagram
+    participant C as Caller
+    participant P as runPipeline
+    participant I as ioredis Pipeline
+    participant R as Redis Server
+
+    loop For each step
+        P->>I: Record pipeline.length before step
+        P->>I: Execute step.run(pipeline)
+        P->>I: Verify pipeline.length grew by exactly 1
+    end
+    P->>R: EXEC (bounded by timeout)
+    alt Settled before timeout
+        R-->>P: Array of [error, result] tuples
+        P->>P: Map results to labels & redact errors
+        P-->>C: PipelineResult { results, durationMs, failed }
+    else Timed out
+        P-->>C: throw PipelineTimeoutError
+    end
+```
 
 `runPipeline` wraps `client.pipeline()`. It does not reimplement batching; the
 only reason it exists is that ioredis's own pipeline API fails in ways that are

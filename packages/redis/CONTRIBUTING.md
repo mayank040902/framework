@@ -35,10 +35,21 @@ awkward to use — is a normal issue and welcome as one.
 
 ## Getting set up
 
-Requires **Node.js 20+** and **pnpm 11.9.0** (`corepack enable` gets you the
-right pnpm).
+Requires **Node.js 20+**. You can work directly inside `packages/redis` with **npm**, or across the monorepo using **pnpm 11.9.0** (`corepack enable` gets you the right pnpm).
+
+### Working directly in `packages/redis` (standalone)
 
 ```bash
+# Inside packages/redis
+npm install
+npm run build
+npm test
+```
+
+### Working from the monorepo root
+
+```bash
+# From repository root
 pnpm install
 pnpm --filter @oneunit/redis build
 pnpm --filter @oneunit/redis test
@@ -57,12 +68,24 @@ need the rest of the monorepo to work on it.
 
 ## The checks a pull request must pass
 
+Run the full verification suite before submitting a pull request:
+
 ```bash
-pnpm --filter @oneunit/redis build
-pnpm --filter @oneunit/redis typecheck
-pnpm --filter @oneunit/redis lint
-pnpm --filter @oneunit/redis test
-pnpm --filter @oneunit/redis pack:check
+# Inside packages/redis:
+npm run verify
+
+# Or from monorepo root:
+pnpm --filter @oneunit/redis verify
+```
+
+`npm run verify` runs the exact five checks in order:
+
+```bash
+npm run build       # Clean dist/ and compile TypeScript
+npm run typecheck   # Typecheck without emitting files
+npm run lint        # ESLint across src/ and test/
+npm test            # Run test suite with Node's native test runner via tsx
+npm run pack:check  # Dry-run npm pack to catch packaging errors
 ```
 
 CI runs these on **Node 20, 22, and 24** against a `redis` service container,
@@ -81,9 +104,9 @@ guard hung the suite outright rather than failing. **Start a Redis on
 `dist`, not `src`: every test file imports `../dist/index.js`, and `dist/` is
 gitignored, so a fresh checkout cannot load the suite at all until it is built.
 Running `test` before `build` does not fail an assertion — it fails to resolve
-the module, on every file, every run. `pnpm run verify` orders all five
-correctly; reach for it rather than the individual scripts. `prepublishOnly`
-builds before testing for the same reason.
+the module, on every file, every run. `npm run verify` (or `pnpm --filter @oneunit/redis verify`)
+orders all five correctly; reach for it rather than the individual scripts.
+`prepublishOnly` builds before testing for the same reason.
 
 ## Writing tests
 
@@ -91,8 +114,28 @@ Tests use the Node built-in runner (`node:test`) via `tsx`. There is no test
 framework to configure.
 
 ```bash
+# Inside packages/redis:
+npm test
+
+# Run tests in watch mode:
+npm run test:watch
+
+# From monorepo root:
 pnpm --filter @oneunit/redis test
 ```
+
+### Test Suite Structure
+
+The test suite in `test/` is organized into focused suites:
+
+| Test File                  | Scope & Responsibilities                                                                              |
+| :------------------------- | :---------------------------------------------------------------------------------------------------- |
+| `test/redis.test.ts`       | Client defaults, URL normalization, BullMQ queue/worker options, health timeout, shutdown idempotency. |
+| `test/pipeline.test.ts`    | Batch command execution, 1-to-1 step validation, timeout guarantees, error redaction, `pipelineValues`. |
+| `test/security.test.ts`    | Plaintext credential redaction (`AUTH`/`HELLO`), prototype pollution guards, safe key names.          |
+| `test/performance.test.ts` | Latency bounds, concurrent health checks, high-volume pipeline throughput.                            |
+| `test/examples.test.ts`    | End-to-end execution smoke tests verifying each runnable script in `examples/`.                      |
+| `test/helpers.ts`          | Shared connectivity probe (`redisAvailable()`, `cachedRedisAvailable()`).                            |
 
 ### A regression test must fail without its fix
 
@@ -249,7 +292,7 @@ the app's log.
   own record for exactly this reason; do not add a status check expecting
   otherwise.
 
-## Before publishing
+## Publishing and Releasing
 
 `npm run verify` is the whole gate in order: build, typecheck, lint, tests,
 `pack:check`. Run it rather than the individual scripts — the pack check is what
@@ -264,8 +307,30 @@ Two packaging rules, both learned the hard way:
   file, so a module you delete keeps shipping its compiled copy. Do not "simplify"
   the clean step away.
 
-The release is driven by a tag: `git tag redis-v1.0.0 && git push origin
-redis-v1.0.0`. `.github/workflows/redis.yml` verifies on Node 20/22/24, installs
+The package is configured for public npm distribution under the `@oneunit` scope:
+
+```json
+"publishConfig": {
+  "access": "public",
+  "registry": "https://registry.npmjs.org/"
+}
+```
+
+### Direct npm CLI Publishing
+
+`package.json` defines `"prepublishOnly": "npm run build && npm test"`, ensuring
+a clean build and full test execution precede every publish:
+
+```bash
+# Inside packages/redis:
+npm login
+npm publish
+```
+
+### Automated CI Release Workflow
+
+Releases are also driven by git tags: `git tag redis-v1.0.0 && git push origin redis-v1.0.0`.
+`.github/workflows/redis.yml` verifies on Node 20/22/24, installs
 the real tarball into a clean project and exercises the public API against a
 Redis service container, then checks the tag matches `package.json` before
 uploading. npm will not let you reuse a version number, so a mistyped tag is not

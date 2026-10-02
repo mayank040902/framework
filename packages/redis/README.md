@@ -1,8 +1,65 @@
-# @oneunit/redis
+<p align="center">
+  <strong>@oneunit/redis</strong>
+  <br/>
+  Redis client and BullMQ job queues for Node.js
+</p>
+
+<p align="center">
+  <a href="https://www.npmjs.com/package/@oneunit/redis"><img src="https://img.shields.io/npm/v/@oneunit/redis?color=0969da&label=npm" alt="npm version"></a>
+  <a href="https://github.com/mayank040902/oneunit/blob/master/packages/redis/LICENSE"><img src="https://img.shields.io/npm/l/@oneunit/redis?color=22863a" alt="license"></a>
+  <img src="https://img.shields.io/badge/node-%3E%3D20-417e38" alt="node version">
+  <img src="https://img.shields.io/badge/types-included-3178c6" alt="types included">
+</p>
+
+<p align="center">
+  Shared connections · Safe Redis URL handling · Credential redaction · Bounded health checks<br/>
+  Idempotent graceful shutdown · Production BullMQ defaults · Safe pipeline batching · Universal logger support
+</p>
+
+---
 
 Production-ready Redis client wrapper and BullMQ job queue integration for Node.js. Works standalone or with any logger that implements `error`, `warn`, `info`, and `debug`.
 
-Part of the [oneunit](https://github.com/mayank040902/oneunit) monorepo.
+> **Monorepo** — [github.com/mayank040902/oneunit](https://github.com/mayank040902/oneunit)
+
+## Table of Contents
+
+- [Highlights](#highlights)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Subpath Imports](#subpath-imports)
+- [Core API Reference](#core-api-reference)
+  - [Client API (`@oneunit/redis/client` or `@oneunit/redis`)](#client-api-oneunitredisclient-or-oneunitredis)
+    - [`createClient`](#createclientoptions-logger)
+    - [`health`](#healthclient-options)
+    - [`shutdown`](#shutdownclient-logger)
+    - [`attachEvents`](#attacheventsclient-logger)
+    - [`redactError`](#redacterrorerror)
+  - [Queue API (`@oneunit/redis/queue` or `@oneunit/redis`)](#queue-api-oneunitredisqueue-or-oneunitredis)
+    - [`createQueue`](#createqueueconfig)
+    - [`createWorker`](#createworkerconfig)
+    - [`attachQueueEvents`](#attachqueueeventsconfig)
+    - [BullMQ Re-exports](#bullmq-re-exports)
+  - [Logger API (`@oneunit/redis`)](#logger-api-oneunitredis)
+    - [Adapters and Helpers](#adapters-and-helpers)
+    - [Automatic Pino Detection](#automatic-pino-detection)
+  - [Pipeline API (`@oneunit/redis/pipeline` or `@oneunit/redis`)](#pipeline-api-oneunitredispipeline-or-oneunitredis)
+    - [`runPipeline`](#runpipelineclient-steps-options)
+    - [`pipelineValues`](#pipelinevaluesresults)
+    - [Errors](#errors)
+- [Common Patterns](#common-patterns)
+  - [1. Read-Through Caching with TTL](#1-read-through-caching-with-ttl)
+  - [2. Session Store with Sliding Expiration](#2-session-store-with-sliding-expiration)
+  - [3. Pub/Sub Messaging](#3-pubsub-messaging)
+  - [4. Background Job Processing with Retries & Cleanup](#4-background-job-processing-with-retries--cleanup)
+  - [5. Proper Teardown Order](#5-proper-teardown-order)
+- [Runnable Examples](#runnable-examples)
+- [Environment Variables](#environment-variables)
+- [Development & Verification](#development--verification)
+- [Architecture & Contributing](#architecture--contributing)
+- [License](#license)
+
+---
 
 ## Highlights
 
@@ -362,6 +419,7 @@ interface Logger {
 - `consoleLogger` — Built-in logger that routes to `console.error`, `console.warn`, `console.info`, and `console.debug`.
 - `silentLogger` — Built-in no-op logger that suppresses all log output.
 - `createLogger(input?)` — Completes a partial logger by routing missing levels to `info` or no-op, preventing `logger.info is not a function` runtime crashes.
+- `normalizeLogger(logger?)` — Normalizes a caller-supplied logger via `createLogger` when provided, or returns `undefined` when absent so unconfigured loggers stay silent.
 - `isLogger(value)` — Type guard that verifies if an unknown object implements logger functions.
 
 #### Automatic Pino Detection
